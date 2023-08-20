@@ -60,7 +60,7 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20230819
+#define REV 20230820
 #define OTAWEB                    // enable upload firmware via web
 #define MQTT                      // enable MQTT
 #include <esp_adc_cal.h>
