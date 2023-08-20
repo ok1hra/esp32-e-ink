@@ -60,7 +60,7 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20230820
+#define REV 20230821
 #define OTAWEB                    // enable upload firmware via web
 #define MQTT                      // enable MQTT
 #include <esp_adc_cal.h>
@@ -124,7 +124,7 @@ bool eInkOfflineDetect = false;
 long RxMqttTimer=0;
 
 //WX
-float Temperature = 28.3;
+float Temperature = 7.3;
 float HumidityRel = 0;
 float Pressure = 0;
 int WindDir = 0;
@@ -374,9 +374,9 @@ void eInkRefresh(){
         }else if(Temperature<10){
           display.setCursor(100, 80);
         }
-        char buffer[10];
-        dtostrf(Temperature, 4, 1, buffer);
-        display.println(String(buffer)+" C");
+        String str = String(Temperature);
+        String subStr = str.substring(0, str.length() - 1);
+        display.println(String(subStr)+" C");
         display.setCursor(190, 30);
         display.setFont(&Open_Sans_Condensed_Bold_20);
         display.println("o");
@@ -387,11 +387,9 @@ void eInkRefresh(){
 
         display.setFont(&Open_Sans_Condensed_Light_16);
         display.setCursor(15, 125);
-        dtostrf(HumidityRel, 4, 1, buffer);
-        display.println("Relative humidity "+String(buffer)+"%");
+        display.println("Relative humidity "+String((int)HumidityRel)+"%");
         display.setCursor(15, 150);
-        dtostrf(Pressure, 4, 1, buffer);
-        display.println("Pressure "+String(buffer)+" hpa");
+        display.println("Pressure "+String((int)Pressure)+" hpa");
 
         display.setFont(&Open_Sans_Condensed_Light_80);
         if(Temperature>99){
@@ -401,11 +399,13 @@ void eInkRefresh(){
         }else if(Temperature<10){
           display.setCursor(95, 260);
         }
-        display.println((int)WindSpeedMaxPeriod);
-        // display.setFont(&Open_Sans_Condensed_Bold_20);
-        display.setFont(&Open_Sans_Condensed_Light_16);
-        display.setCursor(40, 285);
-        display.println("gust m/s");
+        if(WindSpeedMaxPeriod>0){
+          display.println((int)WindSpeedMaxPeriod);
+          // display.setFont(&Open_Sans_Condensed_Bold_20);
+          display.setFont(&Open_Sans_Condensed_Light_16);
+          display.setCursor(40, 285);
+          display.println("gust m/s");
+        }
 
         // int Pressure = 0;
         // int WindSpeedAvg = 0;
@@ -506,13 +506,17 @@ void Watchdog(){
       display.println("W");
     }
     for (int j=0; j<36; j++) {
-      if(j % 9 == 0 && R<100){
-        display.fillCircle(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), dot2, GxEPD_WHITE);
+      if(j % 9 == 0){
+        if(R<100){
+          display.fillCircle(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), dot2, GxEPD_WHITE);
+        }
       }else{
         display.fillCircle(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), dot1, GxEPD_WHITE);
       }
     }
-    Arrow(deg,X,Y,R*0.9);
+    if( (WindSpeedMaxPeriod>0 && mainHWdeviceSelect==1) || mainHWdeviceSelect==0){
+      Arrow(deg,X,Y,R*0.9);
+    }
 }
 
 //-------------------------------------------------------------------------------------------------------
@@ -615,7 +619,7 @@ bool mqttReconnect() {
           //   Serial.print("mqttReconnect-subscribe ");
           //   Serial.println(String(cstr3));
           // }
-          MqttPubString("get", "4eink", false);
+          // MqttPubString("get", "4eink", false);
 
 
       }else if( mainHWdeviceSelect==1){
@@ -667,7 +671,6 @@ bool mqttReconnect() {
           Serial.println(String(cstr9));
         }
 
-          MqttPubString("get", "4eink", false);
 
       }
       display.fillScreen(GxEPD_BLACK);
@@ -698,6 +701,7 @@ bool mqttReconnect() {
       display.setCursor(200, 385);
       display.print(REV);
       display.display(false);
+      MqttPubString("get", "4eink", false);
     }
     return mqttClient.connected();
 }
@@ -796,7 +800,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
             exp = exp*10;
           }
         }
-        Temperature=NR/100;
+        Temperature=(float)NR/100.0;
         Serial.println("Temperature-Celsius-HTU21D "+String(Temperature)+"°");
         RxMqttTimer=millis();
         eInkNeedRefresh=true;
@@ -814,7 +818,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
             exp = exp*10;
           }
         }
-        HumidityRel=NR/100;
+        HumidityRel=(float)NR/100.0;
         Serial.println("HumidityRel-Percent-HTU21D "+String(HumidityRel)+"%");
         RxMqttTimer=millis();
         eInkNeedRefresh=true;
@@ -832,7 +836,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
             exp = exp*10;
           }
         }
-        Pressure=NR/100;
+        Pressure=(float)NR/100.0;
         Serial.println("Pressure-hPa-BMP280 "+String(Pressure)+" hpa");
         RxMqttTimer=millis();
         eInkNeedRefresh=true;
@@ -868,7 +872,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
             exp = exp*10;
           }
         }
-        WindSpeedAvg=NR/100;
+        WindSpeedAvg=(float)NR/100.0;
         Serial.println("WindSpeedAvg-mps "+String(WindSpeedAvg)+" m/s");
         RxMqttTimer=millis();
         eInkNeedRefresh=true;
@@ -886,7 +890,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
             exp = exp*10;
           }
         }
-        WindSpeedMaxPeriod=NR/100;
+        WindSpeedMaxPeriod=(float)NR/100.0;
         Serial.println("WindSpeedMaxPeriod-mps "+String(WindSpeedMaxPeriod)+" m/s");
         RxMqttTimer=millis();
         eInkNeedRefresh=true;
@@ -899,18 +903,18 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
 } // MqttRx END
 
 //-----------------------------------------------------------------------------------
-void MqttPubString(String TOPIC, String DATA, bool RETAIN){
+void MqttPubString(String TOPICEND, String DATA, bool RETAIN){
   char charbuf[50];
    // memcpy( charbuf, mac, 6);
    WiFi.macAddress().toCharArray(charbuf, 18);
   // if(EnableEthernet==1 && MQTT_ENABLE==1 && EthLinkStatus==1 && mqttClient.connected()==true){
   if(mqttClient.connected()==true){
     if (mqttClient.connect(charbuf)) {
-      String topic = String(TOPIC)+String(mainHWdevice[mainHWdeviceSelect][0]);
+      Serial.print("TXmqtt > ");
+      String topic = String(TOPIC)+String(TOPICEND);
       topic.toCharArray( mqttPath, 50 );
       DATA.toCharArray( mqttTX, 50 );
       mqttClient.publish(mqttPath, mqttTX, RETAIN);
-      Serial.print("TXmqtt > ");
       Serial.print(mqttPath);
       Serial.print(" ");
       Serial.println(mqttTX);
