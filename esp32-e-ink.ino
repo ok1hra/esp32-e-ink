@@ -367,12 +367,18 @@ void eInkRefresh(){
 
         display.setTextColor(GxEPD_WHITE);
         display.setFont(&Open_Sans_Condensed_Light_80);
-        if(Temperature>99){
-          display.setCursor(40, 80);
-        }else if(Temperature<100 && Temperature>9){
-          display.setCursor(70, 80);
-        }else if(Temperature<10){
-          display.setCursor(100, 80);
+        int Xshift=0;
+        if(Temperature<0){
+          Xshift=-20;
+        }else{
+          Xshift=0;
+        }
+        if(abs(Temperature)>99){
+          display.setCursor(40+Xshift, 80);
+        }else if(abs(Temperature)<100 && abs(Temperature)>9){
+          display.setCursor(70+Xshift, 80);
+        }else if(abs(Temperature)<10){
+          display.setCursor(100+Xshift, 80);
         }
         String str = String(Temperature);
         String subStr = str.substring(0, str.length() - 1);
@@ -392,12 +398,12 @@ void eInkRefresh(){
         display.println("Pressure "+String((int)Pressure)+" hpa");
 
         display.setFont(&Open_Sans_Condensed_Light_80);
-        if(Temperature>99){
-          display.setCursor(35, 260);
-        }else if(Temperature<100 && Temperature>9){
-          display.setCursor(65, 260);
-        }else if(Temperature<10){
-          display.setCursor(95, 260);
+        if(abs(WindSpeedMaxPeriod)>99){
+          display.setCursor(0, 260);
+        }else if(abs(WindSpeedMaxPeriod)<100 && abs(WindSpeedMaxPeriod)>9){
+          display.setCursor(30, 260);
+        }else if(abs(WindSpeedMaxPeriod)<10){
+          display.setCursor(60, 260);
         }
         if(WindSpeedMaxPeriod>0){
           display.println((int)WindSpeedMaxPeriod);
@@ -792,13 +798,20 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
       CheckTopicBase = String(TOPIC) + "Temperature-Celsius-HTU21D";
       if ( CheckTopicBase.equals( String(topic) )){
         int NR = 0;
+        bool NEGATIV = false;
         unsigned long exp = 1;
         for (int i = length-1; i >=0 ; i--) {
+          if(p[i]==45){
+            NEGATIV = true;
+          }
           // Numbers only
           if(p[i]>=48 && p[i]<=58){
             NR = NR + (p[i]-48)*exp;
             exp = exp*10;
           }
+        }
+        if(NEGATIV==true){
+          NR=-NR;
         }
         Temperature=(float)NR/100.0;
         Serial.println("Temperature-Celsius-HTU21D "+String(Temperature)+"°");
