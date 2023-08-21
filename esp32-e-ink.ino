@@ -60,7 +60,7 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20230821
+#define REV 20230822
 #define OTAWEB                    // enable upload firmware via web
 #define MQTT                      // enable MQTT
 #include <esp_adc_cal.h>
@@ -69,16 +69,14 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 #include <SPI.h>
 #include <GxEPD2_BW.h>
 // source https://oleddisplay.squix.ch/ - must copy via clipboard!
-#include "Open_Sans_Condensed_Light_80.h"
-#include "Open_Sans_Condensed_Light_16.h"
-#include "Open_Sans_Condensed_Bold_20.h"
-// #include "Open_Sans_Condensed_Light_60.h"
-// #include "Open_Sans_Condensed_Light_40.h"
-// #include "Open_Sans_Condensed_Light_20.h"
-// #include "Open_Sans_Condensed_Bold_40.h"
+// #include "Open_Sans_Condensed_Light_80.h"
+// #include "Open_Sans_Condensed_Bold_20.h"
+// #include "Open_Sans_Condensed_Light_16.h"
 
 // https://rop.nl/truetype2gfx/
-// #include "Logisoso250pt7b.h"
+#include "Logisoso8pt7b.h"
+#include "Logisoso10pt7b.h"
+#include "Logisoso50pt7b.h"
 // display.setFont(&Logisoso250pt7b);
 
 // #define SLEEP                    // Uncomment so board goes to sleep after printing on display
@@ -202,7 +200,7 @@ void setup(void) {
     Serial.print("micro SD card is not inserted");
     display.fillScreen(GxEPD_WHITE);
     display.setTextColor(GxEPD_BLACK);
-    display.setFont(&Open_Sans_Condensed_Bold_20);
+    display.setFont(&Logisoso10pt7b);
     display.setCursor(30, 120);
     display.println("!");
     display.setCursor(30, 160);
@@ -221,17 +219,17 @@ void setup(void) {
 
   display.fillScreen(GxEPD_BLACK);
   display.setTextColor(GxEPD_WHITE);
-  display.setFont(&Open_Sans_Condensed_Bold_20);
+  display.setFont(&Logisoso10pt7b);
   display.setCursor(70, 150);
   display.println("Connecting");
-  display.setFont(&Open_Sans_Condensed_Light_16);
+  display.setFont(&Logisoso8pt7b);
   display.setCursor(90, 190);
   display.println("MicroSD import "+String(microSDlines)+" values");
     display.fillCircle(80, 190-7, 3, GxEPD_WHITE);
   display.setCursor(90, 220);
   display.println("WiFi...");
     display.fillCircle(80, 220-7, 3, GxEPD_WHITE);
-  display.setFont(&Open_Sans_Condensed_Light_16);
+  display.setFont(&Logisoso8pt7b);
   display.setCursor(200, 385);
   display.print(REV);
   display.display(false);
@@ -318,33 +316,40 @@ void eInkRefresh(){
       }
 
       display.setTextColor(GxEPD_WHITE);
-      display.setFont(&Open_Sans_Condensed_Light_80);
+      display.setFont(&Logisoso50pt7b);
+      /*
+      char to - (minus) width 39px
+      char width 33px
+      char to char width 44px
+      dot+char width 68px
+      */
       if(Azimuth>=0){
         if(AzimuthShifted(Azimuth)>99){
-          display.setCursor(170, 355);
+          display.setCursor(175-44, 360);
         }else if(AzimuthShifted(Azimuth)<100 && AzimuthShifted(Azimuth)>9){
-          display.setCursor(200, 355);
+          display.setCursor(175, 360);
         }else if(AzimuthShifted(Azimuth)<10){
-          display.setCursor(230, 355);
+          display.setCursor(175+44, 360);
         }
         display.println(AzimuthShifted(Azimuth));
-        display.setCursor(270, 310);
-        display.setFont(&Open_Sans_Condensed_Bold_20);
-        display.println("o");
+        // display.setCursor(270, 310);
+        // display.setFont(&Logisoso10pt7b);
+        // display.println("o");
+        display.fillCircle(275, 300, 6, GxEPD_WHITE);
       }else{
         display.setCursor(170, 355);
         display.println("n/a");
       }
       int ZZshift=2;
-      display.setFont(&Open_Sans_Condensed_Light_16);
+      display.setFont(&Logisoso8pt7b);
       display.setCursor(15, 285+4*ZZshift);
       display.println(String(SSID)+" "+String(WiFi.RSSI())+" dBm");
       display.setCursor(15, 310+3*ZZshift);
       display.print(WiFi.localIP());
-      display.setFont(&Open_Sans_Condensed_Bold_20);
+      display.setFont(&Logisoso10pt7b);
       display.setCursor(15, 335+2*ZZshift);
       display.println(Name);
-      display.setFont(&Open_Sans_Condensed_Light_16);
+      display.setFont(&Logisoso8pt7b);
       display.setCursor(15, 360+ZZshift);
       display.println(String(TOPIC)+"#");
       display.setCursor(15, 385);
@@ -352,7 +357,7 @@ void eInkRefresh(){
       display.println("UTC "+String(buf));
       if(eInkOfflineDetect==true){
         display.setCursor(185, 385);
-        display.setFont(&Open_Sans_Condensed_Bold_20);
+        display.setFont(&Logisoso10pt7b);
         display.print("OFF >"+String(OfflineTimeout)+"min");
       }else{
         display.setCursor(200, 385);
@@ -366,50 +371,51 @@ void eInkRefresh(){
         display.fillScreen(GxEPD_BLACK);
 
         display.setTextColor(GxEPD_WHITE);
-        display.setFont(&Open_Sans_Condensed_Light_80);
+        display.setFont(&Logisoso50pt7b);
         int Xshift=0;
         if(Temperature<0){
-          Xshift=-20;
+          Xshift=-39;
         }else{
           Xshift=0;
         }
-        if(abs(Temperature)>99){
-          display.setCursor(40+Xshift, 80);
-        }else if(abs(Temperature)<100 && abs(Temperature)>9){
-          display.setCursor(70+Xshift, 80);
+        if(abs(Temperature)>9){
+          display.setCursor(64+Xshift, 85);
         }else if(abs(Temperature)<10){
-          display.setCursor(100+Xshift, 80);
+          display.setCursor(97+Xshift, 85);
         }
         String str = String(Temperature);
         String subStr = str.substring(0, str.length() - 1);
-        display.println(String(subStr)+" C");
-        display.setCursor(190, 30);
-        display.setFont(&Open_Sans_Condensed_Bold_20);
-        display.println("o");
+        display.println(String(subStr));
+        display.setCursor(242, 85);
+        display.println("C");
+        display.fillCircle(230, 25, 6, GxEPD_WHITE);
 
         display.drawLine(15, 100, 285, 100, 2);
         int XX = (285-15)/100*HumidityRel+15;
         display.fillCircle(XX, 100, 3, GxEPD_WHITE);
 
-        display.setFont(&Open_Sans_Condensed_Light_16);
+        display.setFont(&Logisoso8pt7b);
         display.setCursor(15, 125);
-        display.println("Relative humidity "+String((int)HumidityRel)+"%");
+        display.print("Relative humidity ");
+        display.setFont(&Logisoso10pt7b);
+        display.print(String((int)HumidityRel)+"%");
         display.setCursor(15, 150);
-        display.println("Pressure "+String((int)Pressure)+" hpa");
+        display.setFont(&Logisoso8pt7b);
+        display.print("Pressure ");
+        display.setFont(&Logisoso10pt7b);
+        display.print(String((int)Pressure)+" hpa");
 
-        display.setFont(&Open_Sans_Condensed_Light_80);
-        if(abs(WindSpeedMaxPeriod)>99){
-          display.setCursor(0, 260);
-        }else if(abs(WindSpeedMaxPeriod)<100 && abs(WindSpeedMaxPeriod)>9){
-          display.setCursor(30, 260);
+        display.setFont(&Logisoso50pt7b);
+        if(abs(WindSpeedMaxPeriod)>9){
+          display.setCursor(6, 260);
         }else if(abs(WindSpeedMaxPeriod)<10){
-          display.setCursor(60, 260);
+          display.setCursor(50, 260);
         }
         if(WindSpeedMaxPeriod>0){
           display.println((int)WindSpeedMaxPeriod);
-          // display.setFont(&Open_Sans_Condensed_Bold_20);
-          display.setFont(&Open_Sans_Condensed_Light_16);
-          display.setCursor(40, 285);
+          // display.setFont(&Logisoso10pt7b);
+          display.setFont(&Logisoso8pt7b);
+          display.setCursor(35, 285);
           display.println("gust m/s");
         }
 
@@ -419,15 +425,15 @@ void eInkRefresh(){
         DirectionalRosette(WindDir, 200, 270, 80);
 
         int ZZshift=2;
-        // display.setFont(&Open_Sans_Condensed_Bold_20);
+        // display.setFont(&Logisoso10pt7b);
         // display.println(Name);
-        display.setFont(&Open_Sans_Condensed_Light_16);
+        display.setFont(&Logisoso8pt7b);
         display.setCursor(15, 285+4*ZZshift);
         display.setCursor(15, 310+3*ZZshift);
         display.println(String(SSID)+" "+String(WiFi.RSSI())+" dBm");
         display.setCursor(15, 335+2*ZZshift);
         display.print(WiFi.localIP());
-        display.setFont(&Open_Sans_Condensed_Light_16);
+        display.setFont(&Logisoso8pt7b);
         display.setCursor(15, 360+ZZshift);
         display.println(String(TOPIC)+"#");
         display.setCursor(15, 385);
@@ -435,7 +441,7 @@ void eInkRefresh(){
         display.println("UTC "+String(buf));
         if(eInkOfflineDetect==true){
           display.setCursor(185, 385);
-          display.setFont(&Open_Sans_Condensed_Bold_20);
+          display.setFont(&Logisoso10pt7b);
           display.print("OFF >"+String(OfflineTimeout)+"min");
         }else{
           display.setCursor(200, 385);
@@ -495,11 +501,11 @@ void Watchdog(){
     if(R>100){
       dot1=2;
       dot2=5;
-      display.setFont(&Open_Sans_Condensed_Bold_20);
+      display.setFont(&Logisoso10pt7b);
     }else{
       dot1=1.5;
       dot2=3;
-      display.setFont(&Open_Sans_Condensed_Light_16);
+      display.setFont(&Logisoso8pt7b);
     }
     if(R>100){
       display.setCursor(Xcoordinate(0,X-5,R-10), Ycoordinate(0,Y,R-10));
@@ -681,10 +687,10 @@ bool mqttReconnect() {
       }
       display.fillScreen(GxEPD_BLACK);
       display.setTextColor(GxEPD_WHITE);
-      display.setFont(&Open_Sans_Condensed_Bold_20);
+      display.setFont(&Logisoso10pt7b);
       display.setCursor(70, 150);
       display.println("Connecting");
-      display.setFont(&Open_Sans_Condensed_Light_16);
+      display.setFont(&Logisoso8pt7b);
       display.setCursor(90, 190);
       display.println("MicroSD import "+String(microSDlines)+" values");
       display.fillCircle(80, 190-7, 3, GxEPD_WHITE);
@@ -700,7 +706,7 @@ bool mqttReconnect() {
       display.setCursor(90, 310);
       display.println(mainHWdevice[mainHWdeviceSelect][1]);
       display.fillCircle(80, 310-7, 3, GxEPD_WHITE);
-      display.setFont(&Open_Sans_Condensed_Light_16);
+      display.setFont(&Logisoso8pt7b);
       display.setCursor(15, 385);
       UtcTime(1).toCharArray(buf, 21);
       display.println("UTC "+String(buf));
@@ -1018,7 +1024,7 @@ void SDtest(){
       if(intCount==1){
         display.fillScreen(GxEPD_WHITE);
         display.setTextColor(GxEPD_BLACK);
-        display.setFont(&Open_Sans_Condensed_Bold_20);
+        display.setFont(&Logisoso10pt7b);
         display.setCursor(40, 120);
         display.println("!");
         display.setCursor(40, 160);
@@ -1048,7 +1054,7 @@ void SDtest(){
     Serial.println(" not found");
     display.fillScreen(GxEPD_WHITE);
     display.setTextColor(GxEPD_BLACK);
-    display.setFont(&Open_Sans_Condensed_Bold_20);
+    display.setFont(&Logisoso10pt7b);
     display.setCursor(40, 120);
     display.println("!");
     display.setCursor(40, 160);
@@ -1070,14 +1076,14 @@ void SDtest(){
 
   display.fillScreen(GxEPD_BLACK);
   display.setTextColor(GxEPD_WHITE);
-  display.setFont(&Open_Sans_Condensed_Bold_20);
+  display.setFont(&Logisoso10pt7b);
   display.setCursor(70, 150);
   display.println("Connecting");
-  display.setFont(&Open_Sans_Condensed_Light_16);
+  display.setFont(&Logisoso8pt7b);
   display.setCursor(90, 190);
   display.println("MicroSD...");
     display.fillCircle(80, 190-7, 3, GxEPD_WHITE);
-  display.setFont(&Open_Sans_Condensed_Light_16);
+  display.setFont(&Logisoso8pt7b);
   display.setCursor(200, 385);
   display.print(REV);
   display.display(false);
