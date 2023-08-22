@@ -70,9 +70,10 @@ module back(){
             translate([-XX*0.5, 0, ZZ-3])  rotate([90,0,0])   cylinder(h=15.2, d=6.2, center=true, $fn=60);
             translate([-XX*0.5+2.7, 0, ZZ])  rotate([90,0,0])   cylinder(h=15.2, d=6.2, center=true, $fn=60);
         }
+        // axis
         hull(){
-            translate([-XX*0.5, 0, ZZ-3])  rotate([90,0,0])   cylinder(h=15.2, d=6.2, center=true, $fn=60);
-            translate([-XX*0.5, 0, ZZ-3])  rotate([90,0,0])   cylinder(h=15+6.2, d=1.2, center=true, $fn=60);
+            translate([-XX*0.5, 0, ZZ-3])  rotate([90,0,0])   cylinder(h=15.4, d=6.2, center=true, $fn=60);
+            translate([-XX*0.5, 0, ZZ-3])  rotate([90,0,0])   cylinder(h=15+6.4, d=1.4, center=true, $fn=60);
         }
         hull(){
             translate([-XX*0.5, 0, ZZ-1.5])  rotate([90,0,0])   cylinder(h=15.2, d=3.2, center=true, $fn=30);
