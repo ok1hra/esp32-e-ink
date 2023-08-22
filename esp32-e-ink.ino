@@ -391,8 +391,8 @@ void eInkRefresh(){
         display.fillCircle(230, 25, 6, GxEPD_WHITE);
 
         display.drawLine(15, 100, 285, 100, 2);
-        int XX = (285-15)/100*HumidityRel+15;
-        display.fillCircle(XX, 100, 3, GxEPD_WHITE);
+        float XX = (285.0-15.0)/100.0*HumidityRel+15.0;
+        display.fillCircle((int)XX, 100, 3, GxEPD_WHITE);
 
         display.setFont(&Logisoso8pt7b);
         display.setCursor(15, 125);
