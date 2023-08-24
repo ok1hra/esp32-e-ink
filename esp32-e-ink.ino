@@ -60,14 +60,18 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20230822
+#define REV 20230824
 #define OTAWEB                    // enable upload firmware via web
 #define MQTT                      // enable MQTT
+// #define BMPMAP
 #include <esp_adc_cal.h>
 #include <FS.h>
 #include <SD.h>
 #include <SPI.h>
 #include <GxEPD2_BW.h>
+#if defined(BMPMAP)
+  #include "ok.h"
+#endif
 // source https://oleddisplay.squix.ch/ - must copy via clipboard!
 // #include "Open_Sans_Condensed_Light_80.h"
 // #include "Open_Sans_Condensed_Bold_20.h"
@@ -117,13 +121,14 @@ int AzimuthTmp    = -42;
 int AzimuthStart  = 0;
 String Name       = "";
 int Status        = 4;
-bool eInkNeedRefresh = true;
+bool eInkNeedRefresh = false;
 bool eInkOfflineDetect = false;
 long RxMqttTimer=0;
 
 //WX
 float Temperature = 7.3;
 float HumidityRel = 0;
+float DewPoint = 0;
 float Pressure = 0;
 int WindDir = 0;
 float WindSpeedAvg = 0;
@@ -311,6 +316,10 @@ void eInkRefresh(){
   if( mainHWdeviceSelect==0 && eInkNeedRefresh==true && millis()-eInkRefreshTimer > 5000 && Azimuth!=-42 && Name != "" ){
       display.fillScreen(GxEPD_BLACK);
 
+      #if defined(BMPMAP)
+        display.drawBitmap(0, 0, ok, 300, 300, GxEPD_WHITE);
+      #endif
+
       if(Azimuth>=0){
         DirectionalRosette(AzimuthShifted(Azimuth), 150, 145, 130);
       }
@@ -398,7 +407,11 @@ void eInkRefresh(){
         display.setCursor(15, 125);
         display.print("Relative humidity ");
         display.setFont(&Logisoso10pt7b);
-        display.print(String((int)HumidityRel)+"%");
+        display.print(String((int)HumidityRel)+"%  ");
+        display.setFont(&Logisoso8pt7b);
+        display.print("Dew point ");
+        display.setFont(&Logisoso10pt7b);
+        display.print(String((int)DewPoint)+" C");
         display.setCursor(15, 150);
         display.setFont(&Logisoso8pt7b);
         display.print("Pressure ");
@@ -683,6 +696,13 @@ bool mqttReconnect() {
           Serial.println(String(cstr9));
         }
 
+        topic = String(TOPIC) + "DewPoint-Celsius-HTU21D";
+        topic.reserve(50);
+        const char *cstr10 = topic.c_str();
+        if(mqttClient.subscribe(cstr10)==true){
+          Serial.print("mqttReconnect-subscribe ");
+          Serial.println(String(cstr10));
+        }
 
       }
       display.fillScreen(GxEPD_BLACK);
@@ -822,8 +842,8 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         Temperature=(float)NR/100.0;
         Serial.println("Temperature-Celsius-HTU21D "+String(Temperature)+"°");
         RxMqttTimer=millis();
-        eInkNeedRefresh=true;
         eInkOfflineDetect = false;
+        eInkNeedRefresh=true;
       }
 
       CheckTopicBase = String(TOPIC) + "HumidityRel-Percent-HTU21D";
@@ -840,8 +860,33 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         HumidityRel=(float)NR/100.0;
         Serial.println("HumidityRel-Percent-HTU21D "+String(HumidityRel)+"%");
         RxMqttTimer=millis();
-        eInkNeedRefresh=true;
         eInkOfflineDetect = false;
+        // eInkNeedRefresh=true;
+      }
+
+      CheckTopicBase = String(TOPIC) + "DewPoint-Celsius-HTU21D";
+      if ( CheckTopicBase.equals( String(topic) )){
+        int NR = 0;
+        bool NEGATIV = false;
+        unsigned long exp = 1;
+        for (int i = length-1; i >=0 ; i--) {
+          if(p[i]==45){
+            NEGATIV = true;
+          }
+          // Numbers only
+          if(p[i]>=48 && p[i]<=58){
+            NR = NR + (p[i]-48)*exp;
+            exp = exp*10;
+          }
+        }
+        if(NEGATIV==true){
+          NR=-NR;
+        }
+        DewPoint=(float)NR/100.0;
+        Serial.println("DewPoint-Celsius-HTU21D "+String(DewPoint)+"°");
+        RxMqttTimer=millis();
+        eInkOfflineDetect = false;
+        // eInkNeedRefresh=true;
       }
 
       CheckTopicBase = String(TOPIC) + "Pressure-hPa-BMP280";
@@ -858,8 +903,8 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         Pressure=(float)NR/100.0;
         Serial.println("Pressure-hPa-BMP280 "+String(Pressure)+" hpa");
         RxMqttTimer=millis();
-        eInkNeedRefresh=true;
         eInkOfflineDetect = false;
+        // eInkNeedRefresh=true;
       }
 
       CheckTopicBase = String(TOPIC) + "WindDir-azimuth";
@@ -876,8 +921,8 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         WindDir=NR;
         Serial.println("WindDir-azimuth "+String(WindDir)+"°az");
         RxMqttTimer=millis();
-        eInkNeedRefresh=true;
         eInkOfflineDetect = false;
+        // eInkNeedRefresh=true;
       }
 
       CheckTopicBase = String(TOPIC) + "WindSpeedAvg-mps";
@@ -894,8 +939,8 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         WindSpeedAvg=(float)NR/100.0;
         Serial.println("WindSpeedAvg-mps "+String(WindSpeedAvg)+" m/s");
         RxMqttTimer=millis();
-        eInkNeedRefresh=true;
         eInkOfflineDetect = false;
+        // eInkNeedRefresh=true;
       }
 
       CheckTopicBase = String(TOPIC) + "WindSpeedMaxPeriod-mps";
@@ -912,8 +957,8 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         WindSpeedMaxPeriod=(float)NR/100.0;
         Serial.println("WindSpeedMaxPeriod-mps "+String(WindSpeedMaxPeriod)+" m/s");
         RxMqttTimer=millis();
-        eInkNeedRefresh=true;
         eInkOfflineDetect = false;
+        // eInkNeedRefresh=true;
       }
 
     }
