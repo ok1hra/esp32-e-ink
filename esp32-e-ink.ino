@@ -60,7 +60,7 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20230824
+#define REV 20230825
 #define OTAWEB                    // enable upload firmware via web
 #define MQTT                      // enable MQTT
 // #define BMPMAP
@@ -127,6 +127,7 @@ long RxMqttTimer=0;
 
 //WX
 float Temperature = 7.3;
+float RainToday = 0.0;
 float HumidityRel = 0;
 float DewPoint = 0;
 float Pressure = 0;
@@ -232,7 +233,7 @@ void setup(void) {
   display.println("MicroSD import "+String(microSDlines)+" values");
     display.fillCircle(80, 190-7, 3, GxEPD_WHITE);
   display.setCursor(90, 220);
-  display.println("WiFi...");
+  display.println("WiFi "+String(SSID)+"...");
     display.fillCircle(80, 220-7, 3, GxEPD_WHITE);
   display.setFont(&Logisoso8pt7b);
   display.setCursor(200, 385);
@@ -333,9 +334,9 @@ void eInkRefresh(){
       dot+char width 68px
       */
       if(Azimuth>=0){
-        if(AzimuthShifted(Azimuth)>99){
+        if(AzimuthShifted(Azimuth)>=100){
           display.setCursor(175-44, 360);
-        }else if(AzimuthShifted(Azimuth)<100 && AzimuthShifted(Azimuth)>9){
+        }else if(AzimuthShifted(Azimuth)<100 && AzimuthShifted(Azimuth)>=10){
           display.setCursor(175, 360);
         }else if(AzimuthShifted(Azimuth)<10){
           display.setCursor(175+44, 360);
@@ -387,7 +388,7 @@ void eInkRefresh(){
         }else{
           Xshift=0;
         }
-        if(abs(Temperature)>9){
+        if(abs(Temperature)>=10){
           display.setCursor(64+Xshift, 85);
         }else if(abs(Temperature)<10){
           display.setCursor(97+Xshift, 85);
@@ -412,14 +413,20 @@ void eInkRefresh(){
         display.print("Dew point ");
         display.setFont(&Logisoso10pt7b);
         display.print(String((int)DewPoint)+" C");
+
         display.setCursor(15, 150);
         display.setFont(&Logisoso8pt7b);
         display.print("Pressure ");
         display.setFont(&Logisoso10pt7b);
         display.print(String((int)Pressure)+" hpa");
+        if(RainToday>0){
+          str = String(RainToday);
+          subStr = str.substring(0, str.length() - 1);
+          display.print("  RAIN "+String(subStr)+" mm");
+        }
 
         display.setFont(&Logisoso50pt7b);
-        if(abs(WindSpeedMaxPeriod)>9){
+        if(abs(WindSpeedMaxPeriod)>=10){
           display.setCursor(6, 260);
         }else if(abs(WindSpeedMaxPeriod)<10){
           display.setCursor(50, 260);
@@ -704,6 +711,14 @@ bool mqttReconnect() {
           Serial.println(String(cstr10));
         }
 
+        topic = String(TOPIC) + "RainToday-mm";
+        topic.reserve(50);
+        const char *cstr11 = topic.c_str();
+        if(mqttClient.subscribe(cstr11)==true){
+          Serial.print("mqttReconnect-subscribe ");
+          Serial.println(String(cstr11));
+        }
+
       }
       display.fillScreen(GxEPD_BLACK);
       display.setTextColor(GxEPD_WHITE);
@@ -724,7 +739,7 @@ bool mqttReconnect() {
       display.println("MQTT "+String(TOPIC)+"#");
       display.fillCircle(80, 280-7, 3, GxEPD_WHITE);
       display.setCursor(90, 310);
-      display.println(mainHWdevice[mainHWdeviceSelect][1]);
+      display.println(String(mainHWdevice[mainHWdeviceSelect][1])+"...");
       display.fillCircle(80, 310-7, 3, GxEPD_WHITE);
       display.setFont(&Logisoso8pt7b);
       display.setCursor(15, 385);
@@ -844,6 +859,31 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         RxMqttTimer=millis();
         eInkOfflineDetect = false;
         eInkNeedRefresh=true;
+      }
+
+      CheckTopicBase = String(TOPIC) + "RainToday-mm";
+      if ( CheckTopicBase.equals( String(topic) )){
+        int NR = 0;
+        bool NEGATIV = false;
+        unsigned long exp = 1;
+        for (int i = length-1; i >=0 ; i--) {
+          if(p[i]==45){
+            // NEGATIV = true;
+          }
+          // Numbers only
+          if(p[i]>=48 && p[i]<=58){
+            NR = NR + (p[i]-48)*exp;
+            exp = exp*10;
+          }
+        }
+        if(NEGATIV==true){
+          // NR=-NR;
+        }
+        RainToday=(float)NR/100.0;
+        Serial.println("RainToday-mm "+String(RainToday)+" mm");
+        RxMqttTimer=millis();
+        eInkOfflineDetect = false;
+        // eInkNeedRefresh=true;
       }
 
       CheckTopicBase = String(TOPIC) + "HumidityRel-Percent-HTU21D";
@@ -997,7 +1037,8 @@ String UtcTime(int format){
       strcpy(buf, "n/a");
     }else{
       if(format==1){
-        strftime(buf, sizeof(buf), "%Y-%b-%d %H:%M:%S", &timeinfo);
+        // strftime(buf, sizeof(buf), "%Y-%b-%d %H:%M:%S", &timeinfo);
+        strftime(buf, sizeof(buf), "%Y-%b-%d %H:%M", &timeinfo);
       }else if(format==2){
         strftime(buf, sizeof(buf), "%H:%M", &timeinfo);
       }else if(format==3){
