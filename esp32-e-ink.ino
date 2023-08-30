@@ -51,16 +51,13 @@ Použití knihovny AsyncElegantOTA ve verzi 2.2.7 v adresáři: /home/dan/Arduin
 Použití knihovny Update ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/Update
 Použití knihovny PubSubClient ve verzi 2.8 v adresáři: /home/dan/Arduino/libraries/PubSubClient
 
-Changelog:
-2023-08-17 - First init
-
 mosquitto_pub -h 54.38.157.134 -t OK1HRA/0/ROT/Azimuth -m '83'
 mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20230825
+#define REV 20230830
 #define OTAWEB                    // enable upload firmware via web
 #define MQTT                      // enable MQTT
 // #define BMPMAP
@@ -655,7 +652,7 @@ bool mqttReconnect() {
 
 
       }else if( mainHWdeviceSelect==1){
-        String topic = String(TOPIC) + "Temperature-Celsius-HTU21D";
+        String topic = String(TOPIC) + "Temperature-Celsius";
         topic.reserve(50);
         const char *cstr4 = topic.c_str();
         if(mqttClient.subscribe(cstr4)==true){
@@ -836,7 +833,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
 
     }else if( mainHWdeviceSelect==1){
 
-      CheckTopicBase = String(TOPIC) + "Temperature-Celsius-HTU21D";
+      CheckTopicBase = String(TOPIC) + "Temperature-Celsius";
       if ( CheckTopicBase.equals( String(topic) )){
         int NR = 0;
         bool NEGATIV = false;
@@ -855,7 +852,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
           NR=-NR;
         }
         Temperature=(float)NR/100.0;
-        Serial.println("Temperature-Celsius-HTU21D "+String(Temperature)+"°");
+        Serial.println("Temperature-Celsius "+String(Temperature)+"°");
         RxMqttTimer=millis();
         eInkOfflineDetect = false;
         eInkNeedRefresh=true;
