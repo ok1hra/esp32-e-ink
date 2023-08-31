@@ -57,7 +57,7 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20230830
+#define REV 20230831
 #define OTAWEB                    // enable upload firmware via web
 #define MQTT                      // enable MQTT
 // #define BMPMAP
@@ -420,19 +420,30 @@ void eInkRefresh(){
           str = String(RainToday);
           subStr = str.substring(0, str.length() - 1);
           display.print("  RAIN "+String(subStr)+" mm");
+          int ten = (int)RainToday % 10;
+          if(RainToday>0 && RainToday<1){
+            display.fillCircle(285-1*(11+1), 170, 3+1, GxEPD_WHITE);
+          }
+          for (int j=ten; j>0; j--) {
+            display.fillCircle(285-j*(11+j), 170, 3+j, GxEPD_WHITE);
+          }
+          int tens = (int)(RainToday/10);
+          for (int j=tens; j>0; j--) {
+            display.fillCircle(j*30-5, 170, 13, GxEPD_WHITE);
+          }
         }
 
         display.setFont(&Logisoso50pt7b);
         if(abs(WindSpeedMaxPeriod)>=10){
-          display.setCursor(6, 260);
+          display.setCursor(6, 265);
         }else if(abs(WindSpeedMaxPeriod)<10){
-          display.setCursor(50, 260);
+          display.setCursor(50, 265);
         }
         if(WindSpeedMaxPeriod>0){
           display.println((int)WindSpeedMaxPeriod);
           // display.setFont(&Logisoso10pt7b);
           display.setFont(&Logisoso8pt7b);
-          display.setCursor(35, 285);
+          display.setCursor(35, 290);
           display.println("gust m/s");
         }
 
@@ -752,6 +763,42 @@ bool mqttReconnect() {
 #endif
 
 //------------------------------------------------------------------------------------
+
+float payloadToFloat(byte *payload, unsigned int length){
+  byte* p = (byte*)malloc(length);
+  memcpy(p,payload,length);
+  int intBuf=0;
+  int mult=1;
+  bool negativ = false;
+  bool decimals = true;
+  int decimal=1;
+  for (int j=length-1; j>=0; j--){
+    // 0-9 || ,-.
+    if( (p[j]>=48 && p[j]<=57) || (p[j]>=44 && p[j]<=46) ){
+      if(p[j]==45){
+        negativ = true;
+      }else if(p[j]==44 || p[j]==46){
+        decimals=false;
+      }else{
+        intBuf = intBuf + ((p[j]-48)*mult);
+        mult = mult*10;
+        if(decimals==true){
+          decimal= decimal*10;
+        }
+      }
+    }
+  }
+  if(negativ==true){
+    intBuf=-intBuf;
+  }
+  if(decimals==false){
+    return (float)intBuf/(float)decimal;
+  }else{
+    return (float)intBuf;
+  }
+
+}
+//------------------------------------------------------------------------------------
 void MqttRx(char *topic, byte *payload, unsigned int length) {
   #if defined(MQTT)
     String CheckTopicBase;
@@ -765,19 +812,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
 
       CheckTopicBase = String(TOPIC) + "AzimuthStop";
       if ( CheckTopicBase.equals( String(topic) )){
-        int NR = 0;
-        unsigned long exp = 1;
-        for (int i = length-1; i >=0 ; i--) {
-          // Numbers only
-          if(p[i]>=48 && p[i]<=58){
-            NR = NR + (p[i]-48)*exp;
-            exp = exp*10;
-          }
-        }
-        if(NR>360){
-          Azimuth=NR-(NR/360);
-        }
-        Azimuth=NR;
+        Azimuth=(int)payloadToFloat(payload, length);
         Serial.println(String(Azimuth)+"°");
         RxMqttTimer=millis();
         if( (AzimuthTmp!=Azimuth && abs(Azimuth-AzimuthTmp)>3) || eInkOfflineDetect==true){
@@ -787,33 +822,9 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         eInkOfflineDetect = false;
       }
 
-      // CheckTopicBase = String(TOPIC) + "Status";
-      // if ( CheckTopicBase.equals( String(topic) )){
-      //   int NR = 0;
-      //   unsigned long exp = 1;
-      //   for (int i = length-1; i >=0 ; i--) {
-      //     // Numbers only
-      //     if(p[i]>=48 && p[i]<=58){
-      //       NR = NR + (p[i]-48)*exp;
-      //       exp = exp*10;
-      //     }
-      //   }
-      //   Status=NR;
-      //   Serial.println("Status "+String(Status));
-      // }
-
       CheckTopicBase = String(TOPIC) + "StartAzimuth";
       if ( CheckTopicBase.equals( String(topic) )){
-        int NR = 0;
-        unsigned long exp = 1;
-        for (int i = length-1; i >=0 ; i--) {
-          // Numbers only
-          if(p[i]>=48 && p[i]<=58){
-            NR = NR + (p[i]-48)*exp;
-            exp = exp*10;
-          }
-        }
-        AzimuthStart=NR;
+        AzimuthStart=(int)payloadToFloat(payload, length);;
         Serial.println("AzimuthStart "+String(AzimuthStart)+"°");
         // eInkNeedRefresh=true;
         // RxMqttTimer=millis();
@@ -835,23 +846,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
 
       CheckTopicBase = String(TOPIC) + "Temperature-Celsius";
       if ( CheckTopicBase.equals( String(topic) )){
-        int NR = 0;
-        bool NEGATIV = false;
-        unsigned long exp = 1;
-        for (int i = length-1; i >=0 ; i--) {
-          if(p[i]==45){
-            NEGATIV = true;
-          }
-          // Numbers only
-          if(p[i]>=48 && p[i]<=58){
-            NR = NR + (p[i]-48)*exp;
-            exp = exp*10;
-          }
-        }
-        if(NEGATIV==true){
-          NR=-NR;
-        }
-        Temperature=(float)NR/100.0;
+        Temperature = payloadToFloat(payload, length);
         Serial.println("Temperature-Celsius "+String(Temperature)+"°");
         RxMqttTimer=millis();
         eInkOfflineDetect = false;
@@ -860,23 +855,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
 
       CheckTopicBase = String(TOPIC) + "RainToday-mm";
       if ( CheckTopicBase.equals( String(topic) )){
-        int NR = 0;
-        bool NEGATIV = false;
-        unsigned long exp = 1;
-        for (int i = length-1; i >=0 ; i--) {
-          if(p[i]==45){
-            // NEGATIV = true;
-          }
-          // Numbers only
-          if(p[i]>=48 && p[i]<=58){
-            NR = NR + (p[i]-48)*exp;
-            exp = exp*10;
-          }
-        }
-        if(NEGATIV==true){
-          // NR=-NR;
-        }
-        RainToday=(float)NR/100.0;
+        RainToday = payloadToFloat(payload, length);
         Serial.println("RainToday-mm "+String(RainToday)+" mm");
         RxMqttTimer=millis();
         eInkOfflineDetect = false;
@@ -885,16 +864,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
 
       CheckTopicBase = String(TOPIC) + "HumidityRel-Percent-HTU21D";
       if ( CheckTopicBase.equals( String(topic) )){
-        int NR = 0;
-        unsigned long exp = 1;
-        for (int i = length-1; i >=0 ; i--) {
-          // Numbers only
-          if(p[i]>=48 && p[i]<=58){
-            NR = NR + (p[i]-48)*exp;
-            exp = exp*10;
-          }
-        }
-        HumidityRel=(float)NR/100.0;
+        HumidityRel=payloadToFloat(payload, length);
         Serial.println("HumidityRel-Percent-HTU21D "+String(HumidityRel)+"%");
         RxMqttTimer=millis();
         eInkOfflineDetect = false;
@@ -903,23 +873,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
 
       CheckTopicBase = String(TOPIC) + "DewPoint-Celsius-HTU21D";
       if ( CheckTopicBase.equals( String(topic) )){
-        int NR = 0;
-        bool NEGATIV = false;
-        unsigned long exp = 1;
-        for (int i = length-1; i >=0 ; i--) {
-          if(p[i]==45){
-            NEGATIV = true;
-          }
-          // Numbers only
-          if(p[i]>=48 && p[i]<=58){
-            NR = NR + (p[i]-48)*exp;
-            exp = exp*10;
-          }
-        }
-        if(NEGATIV==true){
-          NR=-NR;
-        }
-        DewPoint=(float)NR/100.0;
+        DewPoint=payloadToFloat(payload, length);
         Serial.println("DewPoint-Celsius-HTU21D "+String(DewPoint)+"°");
         RxMqttTimer=millis();
         eInkOfflineDetect = false;
@@ -928,16 +882,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
 
       CheckTopicBase = String(TOPIC) + "Pressure-hPa-BMP280";
       if ( CheckTopicBase.equals( String(topic) )){
-        int NR = 0;
-        unsigned long exp = 1;
-        for (int i = length-1; i >=0 ; i--) {
-          // Numbers only
-          if(p[i]>=48 && p[i]<=58){
-            NR = NR + (p[i]-48)*exp;
-            exp = exp*10;
-          }
-        }
-        Pressure=(float)NR/100.0;
+        Pressure=payloadToFloat(payload, length);
         Serial.println("Pressure-hPa-BMP280 "+String(Pressure)+" hpa");
         RxMqttTimer=millis();
         eInkOfflineDetect = false;
@@ -946,16 +891,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
 
       CheckTopicBase = String(TOPIC) + "WindDir-azimuth";
       if ( CheckTopicBase.equals( String(topic) )){
-        int NR = 0;
-        unsigned long exp = 1;
-        for (int i = length-1; i >=0 ; i--) {
-          // Numbers only
-          if(p[i]>=48 && p[i]<=58){
-            NR = NR + (p[i]-48)*exp;
-            exp = exp*10;
-          }
-        }
-        WindDir=NR;
+        WindDir=(int)payloadToFloat(payload, length);
         Serial.println("WindDir-azimuth "+String(WindDir)+"°az");
         RxMqttTimer=millis();
         eInkOfflineDetect = false;
@@ -964,16 +900,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
 
       CheckTopicBase = String(TOPIC) + "WindSpeedAvg-mps";
       if ( CheckTopicBase.equals( String(topic) )){
-        int NR = 0;
-        unsigned long exp = 1;
-        for (int i = length-1; i >=0 ; i--) {
-          // Numbers only
-          if(p[i]>=48 && p[i]<=58){
-            NR = NR + (p[i]-48)*exp;
-            exp = exp*10;
-          }
-        }
-        WindSpeedAvg=(float)NR/100.0;
+        WindSpeedAvg=payloadToFloat(payload, length);
         Serial.println("WindSpeedAvg-mps "+String(WindSpeedAvg)+" m/s");
         RxMqttTimer=millis();
         eInkOfflineDetect = false;
@@ -982,16 +909,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
 
       CheckTopicBase = String(TOPIC) + "WindSpeedMaxPeriod-mps";
       if ( CheckTopicBase.equals( String(topic) )){
-        int NR = 0;
-        unsigned long exp = 1;
-        for (int i = length-1; i >=0 ; i--) {
-          // Numbers only
-          if(p[i]>=48 && p[i]<=58){
-            NR = NR + (p[i]-48)*exp;
-            exp = exp*10;
-          }
-        }
-        WindSpeedMaxPeriod=(float)NR/100.0;
+        WindSpeedMaxPeriod=payloadToFloat(payload, length);
         Serial.println("WindSpeedMaxPeriod-mps "+String(WindSpeedMaxPeriod)+" m/s");
         RxMqttTimer=millis();
         eInkOfflineDetect = false;
@@ -1064,8 +982,12 @@ int readFile(fs::FS &fs, const char *path)
 }
 
 //-------------------------------------------------------------------------------------------------------
-int SDtestInit()
-{
+int SDtestInit(){
+  /*
+  .SD Card Type: SDSC, size: 124 Mb
+
+
+  */
 	char disp[50];
 	uint8_t cardType;
 	uint64_t cardSize;
