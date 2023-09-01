@@ -57,7 +57,7 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20230831
+#define REV 20230901
 #define OTAWEB                    // enable upload firmware via web
 #define MQTT                      // enable MQTT
 // #define BMPMAP
@@ -599,7 +599,7 @@ void Mqtt(){
     if (millis()-MqttStatusTimer[0]>MqttStatusTimer[1]){
       if(!mqttClient.connected()){
         long now = millis();
-        if (now - lastMqttReconnectAttempt > 5000) {
+        if (now - lastMqttReconnectAttempt > 10000) {
           lastMqttReconnectAttempt = now;
           Serial.print("Attempt to MQTT reconnect | ");
           Serial.println(millis()/1000);
@@ -626,9 +626,25 @@ bool mqttReconnect() {
     if (mqttClient.connect(charbuf)) {
       Serial.println("mqttReconnect-connected");
 
+      String topic = String(ROT_TOPIC) + "mainHWdeviceSelect";
+      topic.reserve(50);
+      const char *cstrr = topic.c_str();
+      if(mqttClient.subscribe(cstrr)==true){
+        Serial.print("mqttReconnect-subscribe ");
+        Serial.println(String(cstrr));
+      }
+
+      topic = String(WX_TOPIC) + "mainHWdeviceSelect";
+      topic.reserve(50);
+      const char *cstrw = topic.c_str();
+      if(mqttClient.subscribe(cstrw)==true){
+        Serial.print("mqttReconnect-subscribe ");
+        Serial.println(String(cstrw));
+      }
+
       // resubscribe
-      if(mainHWdeviceSelect==0){
-        String topic = String(TOPIC) + "AzimuthStop";
+      // if(mainHWdeviceSelect==0){
+        topic = String(ROT_TOPIC) + "AzimuthStop";
         topic.reserve(50);
         const char *cstr0 = topic.c_str();
         if(mqttClient.subscribe(cstr0)==true){
@@ -636,7 +652,7 @@ bool mqttReconnect() {
           Serial.println(String(cstr0));
         }
 
-        topic = String(TOPIC) + "Name";
+        topic = String(ROT_TOPIC) + "Name";
         topic.reserve(50);
         const char *cstr1 = topic.c_str();
         if(mqttClient.subscribe(cstr1)==true){
@@ -644,7 +660,7 @@ bool mqttReconnect() {
           Serial.println(String(cstr1));
         }
 
-        topic = String(TOPIC) + "StartAzimuth";
+        topic = String(ROT_TOPIC) + "StartAzimuth";
         topic.reserve(50);
         const char *cstr2 = topic.c_str();
         if(mqttClient.subscribe(cstr2)==true){
@@ -662,8 +678,8 @@ bool mqttReconnect() {
           // MqttPubString("get", "4eink", false);
 
 
-      }else if( mainHWdeviceSelect==1){
-        String topic = String(TOPIC) + "Temperature-Celsius";
+      // }else if( mainHWdeviceSelect==1){
+        topic = String(WX_TOPIC) + "Temperature-Celsius";
         topic.reserve(50);
         const char *cstr4 = topic.c_str();
         if(mqttClient.subscribe(cstr4)==true){
@@ -671,7 +687,7 @@ bool mqttReconnect() {
           Serial.println(String(cstr4));
         }
 
-        topic = String(TOPIC) + "HumidityRel-Percent-HTU21D";
+        topic = String(WX_TOPIC) + "HumidityRel-Percent-HTU21D";
         topic.reserve(50);
         const char *cstr5 = topic.c_str();
         if(mqttClient.subscribe(cstr5)==true){
@@ -679,7 +695,7 @@ bool mqttReconnect() {
           Serial.println(String(cstr5));
         }
 
-        topic = String(TOPIC) + "Pressure-hPa-BMP280";
+        topic = String(WX_TOPIC) + "Pressure-hPa-BMP280";
         topic.reserve(50);
         const char *cstr6 = topic.c_str();
         if(mqttClient.subscribe(cstr6)==true){
@@ -687,7 +703,7 @@ bool mqttReconnect() {
           Serial.println(String(cstr6));
         }
 
-        topic = String(TOPIC) + "WindDir-azimuth";
+        topic = String(WX_TOPIC) + "WindDir-azimuth";
         topic.reserve(50);
         const char *cstr7 = topic.c_str();
         if(mqttClient.subscribe(cstr7)==true){
@@ -695,7 +711,7 @@ bool mqttReconnect() {
           Serial.println(String(cstr7));
         }
 
-        topic = String(TOPIC) + "WindSpeedAvg-mps";
+        topic = String(WX_TOPIC) + "WindSpeedAvg-mps";
         topic.reserve(50);
         const char *cstr8 = topic.c_str();
         if(mqttClient.subscribe(cstr8)==true){
@@ -703,7 +719,7 @@ bool mqttReconnect() {
           Serial.println(String(cstr8));
         }
 
-        topic = String(TOPIC) + "WindSpeedMaxPeriod-mps";
+        topic = String(WX_TOPIC) + "WindSpeedMaxPeriod-mps";
         topic.reserve(50);
         const char *cstr9 = topic.c_str();
         if(mqttClient.subscribe(cstr9)==true){
@@ -711,7 +727,7 @@ bool mqttReconnect() {
           Serial.println(String(cstr9));
         }
 
-        topic = String(TOPIC) + "DewPoint-Celsius-HTU21D";
+        topic = String(WX_TOPIC) + "DewPoint-Celsius-HTU21D";
         topic.reserve(50);
         const char *cstr10 = topic.c_str();
         if(mqttClient.subscribe(cstr10)==true){
@@ -719,7 +735,7 @@ bool mqttReconnect() {
           Serial.println(String(cstr10));
         }
 
-        topic = String(TOPIC) + "RainToday-mm";
+        topic = String(WX_TOPIC) + "RainToday-mm";
         topic.reserve(50);
         const char *cstr11 = topic.c_str();
         if(mqttClient.subscribe(cstr11)==true){
@@ -727,7 +743,7 @@ bool mqttReconnect() {
           Serial.println(String(cstr11));
         }
 
-      }
+      // }
       display.fillScreen(GxEPD_BLACK);
       display.setTextColor(GxEPD_WHITE);
       display.setFont(&Logisoso10pt7b);
@@ -808,9 +824,30 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
     // static bool HeardBeatStatus;
     Serial.print("RXmqtt < ");
 
+    CheckTopicBase = String(TOPIC) + "mainHWdeviceSelect";
+    if ( CheckTopicBase.equals( String(topic) )){
+      // int intBuf=(int)payloadToFloat(payload, length);
+      // if(intBuf==0 || intBuf==1){
+      if(mainHWdeviceSelect==0){
+        mainHWdeviceSelect=1;
+        TOPIC = WX_TOPIC;
+      }else if(mainHWdeviceSelect==1){
+        mainHWdeviceSelect=0;
+        TOPIC = ROT_TOPIC;
+      }
+        // mainHWdeviceSelect=intBuf;
+        Serial.println(String(mainHWdeviceSelect));
+        Serial.println("  TOPIC= "+String(TOPIC));
+        MqttPubString("get", "4eink", false);
+      // }
+      RxMqttTimer=millis();
+      eInkOfflineDetect = false;
+      eInkNeedRefresh=true;
+    }
+
     if( mainHWdeviceSelect==0){
 
-      CheckTopicBase = String(TOPIC) + "AzimuthStop";
+      CheckTopicBase = String(ROT_TOPIC) + "AzimuthStop";
       if ( CheckTopicBase.equals( String(topic) )){
         Azimuth=(int)payloadToFloat(payload, length);
         Serial.println(String(Azimuth)+"°");
@@ -822,7 +859,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         eInkOfflineDetect = false;
       }
 
-      CheckTopicBase = String(TOPIC) + "StartAzimuth";
+      CheckTopicBase = String(ROT_TOPIC) + "StartAzimuth";
       if ( CheckTopicBase.equals( String(topic) )){
         AzimuthStart=(int)payloadToFloat(payload, length);;
         Serial.println("AzimuthStart "+String(AzimuthStart)+"°");
@@ -830,7 +867,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         // RxMqttTimer=millis();
       }
 
-      CheckTopicBase = String(TOPIC) + "Name";
+      CheckTopicBase = String(ROT_TOPIC) + "Name";
       if ( CheckTopicBase.equals( String(topic) )){
         String buf = "";
         for (int i = 0; i <=length-1 ; i++) {
@@ -844,7 +881,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
 
     }else if( mainHWdeviceSelect==1){
 
-      CheckTopicBase = String(TOPIC) + "Temperature-Celsius";
+      CheckTopicBase = String(WX_TOPIC) + "Temperature-Celsius";
       if ( CheckTopicBase.equals( String(topic) )){
         Temperature = payloadToFloat(payload, length);
         Serial.println("Temperature-Celsius "+String(Temperature)+"°");
@@ -853,7 +890,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         eInkNeedRefresh=true;
       }
 
-      CheckTopicBase = String(TOPIC) + "RainToday-mm";
+      CheckTopicBase = String(WX_TOPIC) + "RainToday-mm";
       if ( CheckTopicBase.equals( String(topic) )){
         RainToday = payloadToFloat(payload, length);
         Serial.println("RainToday-mm "+String(RainToday)+" mm");
@@ -862,7 +899,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         // eInkNeedRefresh=true;
       }
 
-      CheckTopicBase = String(TOPIC) + "HumidityRel-Percent-HTU21D";
+      CheckTopicBase = String(WX_TOPIC) + "HumidityRel-Percent-HTU21D";
       if ( CheckTopicBase.equals( String(topic) )){
         HumidityRel=payloadToFloat(payload, length);
         Serial.println("HumidityRel-Percent-HTU21D "+String(HumidityRel)+"%");
@@ -871,7 +908,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         // eInkNeedRefresh=true;
       }
 
-      CheckTopicBase = String(TOPIC) + "DewPoint-Celsius-HTU21D";
+      CheckTopicBase = String(WX_TOPIC) + "DewPoint-Celsius-HTU21D";
       if ( CheckTopicBase.equals( String(topic) )){
         DewPoint=payloadToFloat(payload, length);
         Serial.println("DewPoint-Celsius-HTU21D "+String(DewPoint)+"°");
@@ -880,7 +917,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         // eInkNeedRefresh=true;
       }
 
-      CheckTopicBase = String(TOPIC) + "Pressure-hPa-BMP280";
+      CheckTopicBase = String(WX_TOPIC) + "Pressure-hPa-BMP280";
       if ( CheckTopicBase.equals( String(topic) )){
         Pressure=payloadToFloat(payload, length);
         Serial.println("Pressure-hPa-BMP280 "+String(Pressure)+" hpa");
@@ -898,7 +935,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         // eInkNeedRefresh=true;
       }
 
-      CheckTopicBase = String(TOPIC) + "WindSpeedAvg-mps";
+      CheckTopicBase = String(WX_TOPIC) + "WindSpeedAvg-mps";
       if ( CheckTopicBase.equals( String(topic) )){
         WindSpeedAvg=payloadToFloat(payload, length);
         Serial.println("WindSpeedAvg-mps "+String(WindSpeedAvg)+" m/s");
@@ -907,7 +944,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         // eInkNeedRefresh=true;
       }
 
-      CheckTopicBase = String(TOPIC) + "WindSpeedMaxPeriod-mps";
+      CheckTopicBase = String(WX_TOPIC) + "WindSpeedMaxPeriod-mps";
       if ( CheckTopicBase.equals( String(topic) )){
         WindSpeedMaxPeriod=payloadToFloat(payload, length);
         Serial.println("WindSpeedMaxPeriod-mps "+String(WindSpeedMaxPeriod)+" m/s");
@@ -1128,13 +1165,11 @@ void readSDSettings(){
           mainHWdeviceSelect = (int)settingValue.toInt();  //0 = IP rotator, 1 = WX station
           // Serial.println("   mainHWdeviceSelect="+String(mainHWdeviceSelect));
           microSDlines++;
-        }else if(settingName == "ROT_TOPIC" && mainHWdeviceSelect==0){
-          TOPIC = String(settingValue)+String(mainHWdevice[mainHWdeviceSelect][0]);
-          // Serial.println("   TOPIC="+String(TOPIC));
+        }else if(settingName == "ROT_TOPIC"){
+          ROT_TOPIC = String(settingValue)+String(mainHWdevice[0][0]);
           microSDlines++;
-        }else if(settingName == "WX_TOPIC" && mainHWdeviceSelect==1){
-          TOPIC = String(settingValue)+String(mainHWdevice[mainHWdeviceSelect][0]);
-          // Serial.println("   TOPIC="+String(TOPIC));
+        }else if(settingName == "WX_TOPIC"){
+          WX_TOPIC = String(settingValue)+String(mainHWdevice[1][0]);
           microSDlines++;
         }else if(settingName == "mqttBroker0"){
           mqttBroker[0] = (int)settingValue.toInt();
@@ -1189,11 +1224,19 @@ void readSDSettings(){
           // Serial.println("   DesignSkin="+String(DesignSkin));
           microSDlines++;
         }
+        if(mainHWdeviceSelect==0){
+          TOPIC = ROT_TOPIC;
+        }else if(mainHWdeviceSelect==1){
+          TOPIC = WX_TOPIC;
+        }
     		settingName = "";
     		settingValue = "";
     	}
     } // end while
     myFile.close();
+    // Serial.println("   ROT_TOPIC="+String(ROT_TOPIC));
+    // Serial.println("   WX_TOPIC="+String(WX_TOPIC));
+    // Serial.println("   TOPIC="+String(TOPIC));
   }else{
     // if the file didn't open, print an error:
     //Serial.println("error opening settings.txt");
