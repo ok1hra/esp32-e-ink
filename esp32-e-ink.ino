@@ -57,18 +57,69 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20230901
+#define REV 20230902
 #define OTAWEB                    // enable upload firmware via web
 #define MQTT                      // enable MQTT
-// #define BMPMAP
+/*
+#define APRSFI                    // enable get from aprs.fi - ends with kernel panic ;(
+[https] GET...
+400805f0
+40078000,len:13508
+load:0x40080400,len:3604
+entry 0x"fou,"time":"1693679987","temp":"18.9","pressure":"1010.1","humidity":"74","wind_direction":"67","wind_speed":"0.0","wind_gust":"0.0","rain_mn":"0.0"}]}
+Guru Meditation Error: Core  1 panic'ed (LoadProhibited). Exception was unhandled.
+Core  1 register400805f0
+*/
 #include <esp_adc_cal.h>
 #include <FS.h>
 #include <SD.h>
 #include <SPI.h>
 #include <GxEPD2_BW.h>
+// #define BMPMAP
 #if defined(BMPMAP)
   #include "ok.h"
 #endif
+#if defined(APRSFI)
+  #include <HTTPClient.h>
+  #include <WiFiClientSecure.h>
+  #include <ArduinoJson.h>
+  String jsonString = "";
+
+  // ISRG Root X1 root .pem certificate for aprs.fi valid to Mon, 04 Jun 2035 11:04:38 GMT
+  const char* rootCACertificate = \
+  "-----BEGIN CERTIFICATE-----\n" \
+  "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\n" \
+  "-----END CERTIFICATE-----\n";
+#endif
+
 // source https://oleddisplay.squix.ch/ - must copy via clipboard!
 // #include "Open_Sans_Condensed_Light_80.h"
 // #include "Open_Sans_Condensed_Bold_20.h"
@@ -86,12 +137,13 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 GxEPD2_BW<GxEPD2_420, GxEPD2_420::HEIGHT> display(GxEPD2_420(/*CS=5*/ SS, /*DC=*/17, /*RST=*/16, /*BUSY=*/4)); // GDEW042T2 400x300, UC8176 (IL0398)
 //GxEPD2_3C<GxEPD2_420c_Z21, GxEPD2_420c_Z21::HEIGHT> display(GxEPD2_420c_Z21(/*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16, /*BUSY=*/ 4)); // GDEQ042Z21 400x300, UC8276
 
-const String mainHWdevice[3][2] = {
+const String mainHWdevice[4][2] = {
     {"/ROT/", "IP rotator"},  // 0
     {"/WX/", "WX station"},   // 1
-    {"topic", "name"},        // 2
+    {"", "aprs.fi"},          // 2
+    {"topic", "name"},        // 3
 };
-int mainHWdeviceSelect = -1;  //0 = IP rotator, 1 = WX station
+int mainHWdeviceSelect = -1;  //0 = IP rotator, 1 = WX station, 2 = aprs.fi source
 String TOPIC = "";        // same as 'location' on IP rotator
 String ROT_TOPIC = "";    // mainHWdevice[mainHWdeviceSelect][0]
 String WX_TOPIC = "";    // mainHWdevice[mainHWdeviceSelect][0]
@@ -100,6 +152,9 @@ int MQTT_PORT = 0;         // MQTT broker port
 IPAddress mqtt_server_ip(mqttBroker[0], mqttBroker[1], mqttBroker[2], mqttBroker[3]);       // MQTT broker IP address
 String SSID = "";
 String PSWD = "";
+String APRS_FI_NAME = "";
+String APRS_FI_APIKEY = "";
+
 unsigned int eInkRotation = 1; // 1 USB TOP, 3 USB DOWN | 0 default, 1 90°CW, 2 180°CW, 3 90°CCW
 int OfflineTimeout = 5;   // minutes
 bool eInkNegativ = true;  // not implemented!
@@ -262,26 +317,58 @@ void setup(void) {
     Serial.print("WIFI dBm: ");
     Serial.println(WiFi.RSSI());
 
+    if(mainHWdeviceSelect==2){
+      display.fillScreen(GxEPD_BLACK);
+      display.setTextColor(GxEPD_WHITE);
+      display.setFont(&Logisoso10pt7b);
+      display.setCursor(70, 150);
+      display.println("Connecting");
+      display.setFont(&Logisoso8pt7b);
+      display.setCursor(90, 190);
+      display.println("MicroSD import "+String(microSDlines)+" values");
+      display.fillCircle(80, 190-7, 3, GxEPD_WHITE);
+      display.setCursor(90, 220);
+      display.println("WiFi "+String(SSID)+" "+String(WiFi.RSSI())+" dBm");
+      display.fillCircle(80, 220-7, 3, GxEPD_WHITE);
+      display.setCursor(90, 250);
+      display.println(WiFi.localIP());
+      display.fillCircle(80, 250-7, 3, GxEPD_WHITE);
+      display.setCursor(90, 280);
+      display.fillCircle(80, 280-7, 3, GxEPD_WHITE);
+      display.println(String(mainHWdevice[mainHWdeviceSelect][1])+"/"+String(APRS_FI_NAME)+"...");
+      display.setFont(&Logisoso8pt7b);
+      display.setCursor(15, 385);
+      UtcTime(1).toCharArray(buf, 21);
+      display.println("UTC "+String(buf));
+      display.setCursor(200, 385);
+      display.print(REV);
+      display.display(false);
+    }
+
     #if defined(MQTT)
+    if(mainHWdeviceSelect==0 || mainHWdeviceSelect==1){
       if (MQTT_LOGIN == true){
         // if (mqttClient.connect("esp32gwClient", MQTT_USER, MQTT_PASS)){
-        //   AfterMQTTconnect();
-        // }
-      }else{
-        mqttClient.setServer(mqtt_server_ip, MQTT_PORT);
-        Serial.println("EthEvent-MQTTclient");
-        mqttClient.setCallback(MqttRx);
-        Serial.println("EthEvent-MQTTcallback");
-        lastMqttReconnectAttempt = 0;
+          //   AfterMQTTconnect();
+          // }
+        }else{
+          if(mainHWdeviceSelect==0 || mainHWdeviceSelect==1 ){
+            mqttClient.setServer(mqtt_server_ip, MQTT_PORT);
+            Serial.println("EthEvent-MQTTclient");
+            mqttClient.setCallback(MqttRx);
+            Serial.println("EthEvent-MQTTcallback");
+            lastMqttReconnectAttempt = 0;
 
-        char charbuf[50];
-         WiFi.macAddress().toCharArray(charbuf, 18);
-        if (mqttClient.connect(charbuf)){
-          Serial.print("EthEvent-maccharbuf ");
-          Serial.println(charbuf);
-          mqttReconnect();
+            char charbuf[50];
+            WiFi.macAddress().toCharArray(charbuf, 18);
+            if (mqttClient.connect(charbuf)){
+              Serial.print("EthEvent-maccharbuf ");
+              Serial.println(charbuf);
+              mqttReconnect();
+            }
+          }
         }
-      }
+    }
     #endif
 
   #endif
@@ -292,9 +379,13 @@ void setup(void) {
     });
     AsyncElegantOTA.begin(&OTAserver);    // Start ElegantOTA
     OTAserver.begin();
+    Serial.println("OTAserver start");
   #endif
   //init and get the time
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  #if defined(APRSFI)
+    jsonString.reserve(900);
+  #endif
 }
 
 //-------------------------------------------------------------------------------------------------------
@@ -305,6 +396,52 @@ void loop(void) {
 
   #if defined(OTAWEB)
    AsyncElegantOTA.loop();
+  #endif
+}
+//-------------------------------------------------------------------------------------------------------
+
+String GetHttps(){
+  #if defined(APRSFI)
+    WiFiClientSecure *client = new WiFiClientSecure;
+    Serial.println("[https] start");
+    if(client) {
+      client -> setCACert(rootCACertificate);
+
+      {
+        // Add a scoping block for HTTPClient https to make sure it is destroyed before WiFiClientSecure *client is
+        HTTPClient https;
+
+        Serial.print("[https] begin...\n");
+        if (https.begin(*client, "https://api.aprs.fi/api/get?name="+String(APRS_FI_NAME)+"&what=wx&apikey="+String(APRS_FI_APIKEY)+"&format=json")) {
+          Serial.print("[https] GET...\n");
+          // start connection and send HTTP header
+          int httpCode = https.GET();
+
+          // httpCode will be negative on error
+          if (httpCode > 0) {
+            // HTTP header has been send and Server response header has been handled
+            Serial.printf("[https] GET... code: %d\n", httpCode);
+
+            // file found at server
+            if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY) {
+              jsonString = https.getString();
+              Serial.print("[https] ");
+              Serial.println(jsonString);
+              RxMqttTimer=millis();
+            }
+          } else {
+            Serial.printf("[https] GET... failed, error: %s\n", https.errorToString(httpCode).c_str());
+          }
+          https.end();
+        } else {
+          Serial.printf("[https] Unable to connect\n");
+        }
+        // End extra scoping block
+      }
+      delete client;
+    } else {
+      Serial.println("[https] Unable to create client");
+    }
   #endif
 }
 //-------------------------------------------------------------------------------------------------------
@@ -373,8 +510,8 @@ void eInkRefresh(){
       display.display(false);
       eInkNeedRefresh=false;
       eInkRefreshTimer=millis();
-  // WX
-  }else if( mainHWdeviceSelect==1 && eInkNeedRefresh==true && millis()-eInkRefreshTimer > 10000 ){
+    // WX
+    }else if( (mainHWdeviceSelect==1 || mainHWdeviceSelect==2) && eInkNeedRefresh==true && millis()-eInkRefreshTimer > 10000 ){
         display.fillScreen(GxEPD_BLACK);
 
         display.setTextColor(GxEPD_WHITE);
@@ -463,7 +600,11 @@ void eInkRefresh(){
         display.print(WiFi.localIP());
         display.setFont(&Logisoso8pt7b);
         display.setCursor(15, 360+ZZshift);
-        display.println(String(TOPIC)+"#");
+        if(mainHWdeviceSelect==1){
+          display.println(String(TOPIC)+"#");
+        }else if(mainHWdeviceSelect==2){
+          display.println(String(mainHWdevice[mainHWdeviceSelect][1])+"/"+String(APRS_FI_NAME));
+        }
         display.setCursor(15, 385);
         UtcTime(1).toCharArray(buf, 21);
         display.println("UTC "+String(buf));
@@ -492,6 +633,46 @@ int AzimuthShifted(int DEG){
 
 //-------------------------------------------------------------------------------------------------------
 void Watchdog(){
+
+  #if defined(APRSFI)
+    static long aprsfiTimer = -900000;
+    if(millis()-aprsfiTimer > 900000 && mainHWdeviceSelect==2){
+      // Serial.println("[json] start");
+
+      // Use https://arduinojson.org/v6/assistant to compute the capacity.
+      StaticJsonDocument<600> doc;
+
+      // jsonString = "{\"command\":\"get\",\"result\":\"ok\",\"found\":1,\"what\":\"wx\",\"entries\":[{\"name\":\"OK1HRA-8\",\"time\":\"1693643356\",\"temp\":\"17.8\",\"pressure\":\"1008.2\",\"humidity\":\"81\",\"wind_direction\":\"270\",\"wind_speed\":\"1.3\",\"wind_gust\":\"2.2\",\"rain_mn\":\"0.7\"}]}";
+      GetHttps();
+      DeserializationError error = deserializeJson(doc, jsonString);
+      // Test if parsing succeeds.
+      if (error) {
+        Serial.print("[json] deserializeJson() failed: ");
+        Serial.println(error.f_str());
+        return;
+      }
+
+      Temperature = doc["entries"][0]["temp"];
+      RainToday = doc["entries"][0]["rain_mn"];
+      HumidityRel = doc["entries"][0]["humidity"];
+      DewPoint = (float)Temperature - (100.0 - constrain(HumidityRel, 0, 100)) / 5.0;
+      Pressure = doc["entries"][0]["pressure"];
+      WindDir = doc["entries"][0]["wind_direction"];
+      WindSpeedMaxPeriod = doc["entries"][0]["wind_gust"];
+
+      Serial.println("[json] Temperature: "+String(Temperature));
+      Serial.println("[json] RainToday: "+String(RainToday));
+      Serial.println("[json] HumidityRel: "+String(HumidityRel));
+      Serial.println("[json] DewPoint: "+String(DewPoint));
+      Serial.println("[json] Pressure: "+String(Pressure));
+      Serial.println("[json] WindDir: "+String(WindDir));
+      Serial.println("[json] WindSpeedMaxPeriod: "+String(WindSpeedMaxPeriod));
+
+      aprsfiTimer=millis();
+      eInkNeedRefresh=true;
+      RxMqttTimer=millis();
+    }
+  #endif
 
   static unsigned long SdCardTimer = millis();
   if(millis()-SdCardTimer > 1000){
@@ -596,7 +777,7 @@ void print_wifi_error(){
 //-------------------------------------------------------------------------------------------------------
 void Mqtt(){
   #if defined(MQTT)
-    if (millis()-MqttStatusTimer[0]>MqttStatusTimer[1]){
+    if (millis()-MqttStatusTimer[0]>MqttStatusTimer[1] && (mainHWdeviceSelect==0 || mainHWdeviceSelect==1)){
       if(!mqttClient.connected()){
         long now = millis();
         if (now - lastMqttReconnectAttempt > 10000) {
@@ -760,7 +941,11 @@ bool mqttReconnect() {
       display.println(WiFi.localIP());
       display.fillCircle(80, 250-7, 3, GxEPD_WHITE);
       display.setCursor(90, 280);
-      display.println("MQTT "+String(TOPIC)+"#");
+      if(mainHWdeviceSelect==0 || mainHWdeviceSelect==1){
+        display.println("MQTT "+String(TOPIC)+"#");
+      }else{
+        display.println("MQTT disable");
+      }
       display.fillCircle(80, 280-7, 3, GxEPD_WHITE);
       display.setCursor(90, 310);
       display.println(String(mainHWdevice[mainHWdeviceSelect][1])+"...");
@@ -964,7 +1149,7 @@ void MqttPubString(String TOPICEND, String DATA, bool RETAIN){
    // memcpy( charbuf, mac, 6);
    WiFi.macAddress().toCharArray(charbuf, 18);
   // if(EnableEthernet==1 && MQTT_ENABLE==1 && EthLinkStatus==1 && mqttClient.connected()==true){
-  if(mqttClient.connected()==true){
+  if(mqttClient.connected()==true && (mainHWdeviceSelect==0 || mainHWdeviceSelect==1)){
     if (mqttClient.connect(charbuf)) {
       Serial.print("TXmqtt > ");
       String topic = String(TOPIC)+String(TOPICEND);
@@ -1206,6 +1391,16 @@ void readSDSettings(){
           // char buff[20];
           // settingValue.toCharArray(buff, 20);
           // PSWD=buff;
+        }else if(settingName == "APRS_FI_NAME"){
+          #if defined(APRSFI)
+            APRS_FI_NAME = settingValue;
+          #endif
+          microSDlines++;
+        }else if(settingName == "APRS_FI_APIKEY"){
+          #if defined(APRSFI)
+            APRS_FI_APIKEY = settingValue;
+          #endif
+          microSDlines++;
         }else if(settingName == "eInkRotation"){
           eInkRotation = (unsigned int)settingValue.toInt();
           display.setRotation(eInkRotation); // 1 USB TOP, 3 USB DOWN | 0 default, 1 90°CW, 2 180°CW, 3 90°CCW
