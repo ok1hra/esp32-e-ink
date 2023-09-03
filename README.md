@@ -3,6 +3,8 @@
 - Used as Wifi display for the rotator (which shows the last position of the antenna, even when the rotator is turned off), and 3D printed WX station
   - Support **IP rotator** electronic [Wiki page](https://remoteqth.com/w/doku.php?id=simple_rotator_interface_v) | [copy on GitHub](https://github.com/ok1hra/IP-rotator/blob/main/Assembly-manual.md) | Main repository [Parameterizable 3D print Antenna rotator in OpenScad](https://github.com/ok1hra/Parameterizable-3D-print-Antenna-rotator-in-OpenScad)
   - Support **3D print WX station** [GitHub](https://github.com/ok1hra/3D-print-WX-station)
+  
+  <img src="https://raw.githubusercontent.com/ok1hra/esp32-e-ink/main/img/wx-station-display.png" height="220">
 - Configured via setup.cfg file on microSD card
 - Powered from USB-C connector
 - Customized 3D printed box in OpenScad, without screw. If possible, the supports can be folded out or hung on a peg.
