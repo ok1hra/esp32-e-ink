@@ -38,15 +38,19 @@ Web:laskakit.cz
 
 HARDWARE ESP32 Dev Module
 IDE 1.8.19
+Použití knihovny FS ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/FS
+Použití knihovny SD ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/SD
+Použití knihovny SPI ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/SPI
 Použití knihovny GxEPD2 ve verzi 1.5.2 v adresáři: /home/dan/Arduino/libraries/GxEPD2
 Použití knihovny Adafruit_GFX_Library ve verzi 1.11.3 v adresáři: /home/dan/Arduino/libraries/Adafruit_GFX_Library
 Použití knihovny Adafruit_BusIO ve verzi 1.14.1 v adresáři: /home/dan/Arduino/libraries/Adafruit_BusIO
 Použití knihovny Wire ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/Wire
-Použití knihovny SPI ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/SPI
+Použití knihovny HTTPClient ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/HTTPClient
 Použití knihovny WiFi ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/WiFi
+Použití knihovny WiFiClientSecure ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/WiFiClientSecure
+Použití knihovny ArduinoJson ve verzi 6.21.3 v adresáři: /home/dan/Arduino/libraries/ArduinoJson
 Použití knihovny AsyncTCP ve verzi 1.1.1 v adresáři: /home/dan/Arduino/libraries/AsyncTCP
 Použití knihovny ESPAsyncWebServer ve verzi 1.2.3 v adresáři: /home/dan/Arduino/libraries/ESPAsyncWebServer
-Použití knihovny FS ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/FS
 Použití knihovny AsyncElegantOTA ve verzi 2.2.7 v adresáři: /home/dan/Arduino/libraries/AsyncElegantOTA
 Použití knihovny Update ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/Update
 Použití knihovny PubSubClient ve verzi 2.8 v adresáři: /home/dan/Arduino/libraries/PubSubClient
@@ -57,7 +61,7 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20230902
+#define REV 20230903
 #define OTAWEB                    // enable upload firmware via web
 #define MQTT                      // enable MQTT
 /*
@@ -553,6 +557,9 @@ void eInkRefresh(){
         display.print("Pressure ");
         display.setFont(&Logisoso10pt7b);
         display.print(String((int)Pressure)+" hpa");
+        Triangle(Pressure, 983.0, 1043.0);  // 1013 +-30
+        display.drawLine(15, 200, 20, 200, 2);
+
         if(RainToday>0){
           str = String(RainToday);
           subStr = str.substring(0, str.length() - 1);
@@ -572,9 +579,9 @@ void eInkRefresh(){
 
         display.setFont(&Logisoso50pt7b);
         if(abs(WindSpeedMaxPeriod)>=10){
-          display.setCursor(6, 265);
+          display.setCursor(6+4, 265);
         }else if(abs(WindSpeedMaxPeriod)<10){
-          display.setCursor(50, 265);
+          display.setCursor(50+4, 265);
         }
         if(WindSpeedMaxPeriod>0){
           display.println((int)WindSpeedMaxPeriod);
@@ -622,6 +629,13 @@ void eInkRefresh(){
         eInkRefreshTimer=millis();
   }
 }
+//------------------------------------------------------------------------------
+void Triangle(float VALUE, float MIN, float MAX){
+  float YY = 400.0-(VALUE - MIN) * (400.0/(MAX-MIN));
+  display.fillTriangle(0, (int)YY-5, 14, (int)YY, 0, (int)YY+5, GxEPD_WHITE);
+  // Serial.println("Triangle Ypx: "+String(YY));
+}
+
 //------------------------------------------------------------------------------
 int AzimuthShifted(int DEG){
   DEG=DEG+AzimuthStart; // 246 + 390 > 236
@@ -1145,22 +1159,24 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
 
 //-----------------------------------------------------------------------------------
 void MqttPubString(String TOPICEND, String DATA, bool RETAIN){
-  char charbuf[50];
-   // memcpy( charbuf, mac, 6);
-   WiFi.macAddress().toCharArray(charbuf, 18);
-  // if(EnableEthernet==1 && MQTT_ENABLE==1 && EthLinkStatus==1 && mqttClient.connected()==true){
-  if(mqttClient.connected()==true && (mainHWdeviceSelect==0 || mainHWdeviceSelect==1)){
-    if (mqttClient.connect(charbuf)) {
-      Serial.print("TXmqtt > ");
-      String topic = String(TOPIC)+String(TOPICEND);
-      topic.toCharArray( mqttPath, 50 );
-      DATA.toCharArray( mqttTX, 50 );
-      mqttClient.publish(mqttPath, mqttTX, RETAIN);
-      Serial.print(mqttPath);
-      Serial.print(" ");
-      Serial.println(mqttTX);
+  #if defined(MQTT)
+    char charbuf[50];
+     // memcpy( charbuf, mac, 6);
+     WiFi.macAddress().toCharArray(charbuf, 18);
+    // if(EnableEthernet==1 && MQTT_ENABLE==1 && EthLinkStatus==1 && mqttClient.connected()==true){
+    if(mqttClient.connected()==true && (mainHWdeviceSelect==0 || mainHWdeviceSelect==1)){
+      if (mqttClient.connect(charbuf)) {
+        Serial.print("TXmqtt > ");
+        String topic = String(TOPIC)+String(TOPICEND);
+        topic.toCharArray( mqttPath, 50 );
+        DATA.toCharArray( mqttTX, 50 );
+        mqttClient.publish(mqttPath, mqttTX, RETAIN);
+        Serial.print(mqttPath);
+        Serial.print(" ");
+        Serial.println(mqttTX);
+      }
     }
-  }
+  #endif
 }
 
 //-------------------------------------------------------------------------------------------------------
