@@ -1,9 +1,10 @@
 # esp32 e-ink (firmware and 3D print box)
-- For hardware from [LaskaKit - ESPink-42 ESP32 e-Paper](https://www.laskakit.cz/laskakit-espink-42-esp32-e-paper-pcb-antenna/) | [GitHub](https://github.com/LaskaKit/ESPink-42)
-- Used as Wifi display for the rotator (which shows the last position of the antenna, even when the rotator is turned off), and 3D printed WX station
-  - Support **IP rotator** electronic [Wiki page](https://remoteqth.com/w/doku.php?id=simple_rotator_interface_v) | [copy on GitHub](https://github.com/ok1hra/IP-rotator/blob/main/Assembly-manual.md) | Main repository [Parameterizable 3D print Antenna rotator in OpenScad](https://github.com/ok1hra/Parameterizable-3D-print-Antenna-rotator-in-OpenScad)
-  - Support **3D print WX station** [GitHub](https://github.com/ok1hra/3D-print-WX-station)
-  
+- Firmware for hardware from [LaskaKit - ESPink-42 ESP32 e-Paper](https://www.laskakit.cz/laskakit-espink-42-esp32-e-paper-pcb-antenna/) | [GitHub](https://github.com/LaskaKit/ESPink-42)
+- Used as Wifi e-ink display for the for the following use:
+  1 **IP rotator** electronic show azimuth also after rotator turned off [Wiki page](https://remoteqth.com/w/doku.php?id=simple_rotator_interface_v) | [copy on GitHub](https://github.com/ok1hra/IP-rotator/blob/main/Assembly-manual.md) | Main repository [Parameterizable 3D print Antenna rotator in OpenScad](https://github.com/ok1hra/Parameterizable-3D-print-Antenna-rotator-in-OpenScad)
+  2 **3D print WX station** [GitHub](https://github.com/ok1hra/3D-print-WX-station)
+  3 **Bash script trasfering WX data from aprs.fi** to MQTT [GitHub](https://github.com/ok1hra/esp32-e-ink/aprsfi2mqtt)
+    
   <img src="https://raw.githubusercontent.com/ok1hra/esp32-e-ink/main/img/wx-station-display.png" height="220">
 - Configured via setup.cfg file on microSD card
 - Powered from USB-C connector
