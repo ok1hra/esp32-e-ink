@@ -4,6 +4,7 @@
   - **IP rotator** electronic show azimuth also after rotator turned off [Wiki page](https://remoteqth.com/w/doku.php?id=simple_rotator_interface_v) | [copy on GitHub](https://github.com/ok1hra/IP-rotator/blob/main/Assembly-manual.md) | Main repository [Parameterizable 3D print Antenna rotator in OpenScad](https://github.com/ok1hra/Parameterizable-3D-print-Antenna-rotator-in-OpenScad)
   - **3D print WX station** [GitHub](https://github.com/ok1hra/3D-print-WX-station)
   - **Bash script trasfering WX data from aprs.fi** to MQTT [GitHub](https://github.com/ok1hra/esp32-e-ink/aprsfi2mqtt)
+  - **Direct read WX data from aprs.fi** see [setup.cfg](https://github.com/ok1hra/esp32-e-ink/blob/main/setup.cfg)
     
   <img src="https://raw.githubusercontent.com/ok1hra/esp32-e-ink/main/img/wx-station-display.png" height="220">
 - Configured via setup.cfg file on microSD card

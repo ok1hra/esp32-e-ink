@@ -45,10 +45,9 @@ Použití knihovny GxEPD2 ve verzi 1.5.2 v adresáři: /home/dan/Arduino/librari
 Použití knihovny Adafruit_GFX_Library ve verzi 1.11.3 v adresáři: /home/dan/Arduino/libraries/Adafruit_GFX_Library
 Použití knihovny Adafruit_BusIO ve verzi 1.14.1 v adresáři: /home/dan/Arduino/libraries/Adafruit_BusIO
 Použití knihovny Wire ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/Wire
-Použití knihovny HTTPClient ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/HTTPClient
-Použití knihovny WiFi ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/WiFi
 Použití knihovny WiFiClientSecure ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/WiFiClientSecure
-Použití knihovny ArduinoJson ve verzi 6.21.3 v adresáři: /home/dan/Arduino/libraries/ArduinoJson
+Použití knihovny WiFi ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/WiFi
+Použití knihovny jsonlib ve verzi 0.1.1 v adresáři: /home/dan/Arduino/libraries/jsonlib
 Použití knihovny AsyncTCP ve verzi 1.1.1 v adresáři: /home/dan/Arduino/libraries/AsyncTCP
 Použití knihovny ESPAsyncWebServer ve verzi 1.2.3 v adresáři: /home/dan/Arduino/libraries/ESPAsyncWebServer
 Použití knihovny AsyncElegantOTA ve verzi 2.2.7 v adresáři: /home/dan/Arduino/libraries/AsyncElegantOTA
@@ -61,19 +60,10 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20230903
+#define REV 20230910
 #define OTAWEB                    // enable upload firmware via web
 #define MQTT                      // enable MQTT
-/*
-#define APRSFI                    // enable get from aprs.fi - ends with kernel panic ;(
-[https] GET...
-400805f0
-40078000,len:13508
-load:0x40080400,len:3604
-entry 0x"fou,"time":"1693679987","temp":"18.9","pressure":"1010.1","humidity":"74","wind_direction":"67","wind_speed":"0.0","wind_gust":"0.0","rain_mn":"0.0"}]}
-Guru Meditation Error: Core  1 panic'ed (LoadProhibited). Exception was unhandled.
-Core  1 register400805f0
-*/
+#define APRSFI                    // enable get from aprs.fi
 #include <esp_adc_cal.h>
 #include <FS.h>
 #include <SD.h>
@@ -84,10 +74,14 @@ Core  1 register400805f0
   #include "ok.h"
 #endif
 #if defined(APRSFI)
-  #include <HTTPClient.h>
+  // #include <HTTPClient.h>
   #include <WiFiClientSecure.h>
-  #include <ArduinoJson.h>
+  const char*  server = "api.aprs.fi";  // Server URL
+  WiFiClientSecure client;
+
+  // #include <ArduinoJson.h>
   String jsonString = "";
+  #include <jsonlib.h>    // https://github.com/wyolum/jsonlib/tree/master/
 
   // ISRG Root X1 root .pem certificate for aprs.fi valid to Mon, 04 Jun 2035 11:04:38 GMT
   const char* rootCACertificate = \
@@ -404,8 +398,9 @@ void loop(void) {
 }
 //-------------------------------------------------------------------------------------------------------
 
-String GetHttps(){
+void GetHttps(){
   #if defined(APRSFI)
+  /*
     WiFiClientSecure *client = new WiFiClientSecure;
     Serial.println("[https] start");
     if(client) {
@@ -446,6 +441,7 @@ String GetHttps(){
     } else {
       Serial.println("[https] Unable to create client");
     }
+    */
   #endif
 }
 //-------------------------------------------------------------------------------------------------------
@@ -651,40 +647,92 @@ void Watchdog(){
   #if defined(APRSFI)
     static long aprsfiTimer = -900000;
     if(millis()-aprsfiTimer > 900000 && mainHWdeviceSelect==2){
+      aprsfiTimer=millis();
+
       // Serial.println("[json] start");
 
       // Use https://arduinojson.org/v6/assistant to compute the capacity.
-      StaticJsonDocument<600> doc;
+      // StaticJsonDocument<600> doc;
 
+      // {"command":"get","result":"ok","found":1,"what":"wx","entries":[{"name":"OK1HRA-8","time":"1694332396","temp":"20.0","pressure":"1007.5","humidity":"60","wind_direction":"247","wind_speed":"3.1","wind_gust":"3.6","rain_mn":"0.0"}]}
       // jsonString = "{\"command\":\"get\",\"result\":\"ok\",\"found\":1,\"what\":\"wx\",\"entries\":[{\"name\":\"OK1HRA-8\",\"time\":\"1693643356\",\"temp\":\"17.8\",\"pressure\":\"1008.2\",\"humidity\":\"81\",\"wind_direction\":\"270\",\"wind_speed\":\"1.3\",\"wind_gust\":\"2.2\",\"rain_mn\":\"0.7\"}]}";
-      GetHttps();
-      DeserializationError error = deserializeJson(doc, jsonString);
+      // GetHttps();
+      // DeserializationError error = deserializeJson(doc, jsonString);
       // Test if parsing succeeds.
-      if (error) {
-        Serial.print("[json] deserializeJson() failed: ");
-        Serial.println(error.f_str());
-        return;
+      // if (error) {
+      //   Serial.print("[json] deserializeJson() failed: ");
+      //   Serial.println(error.f_str());
+      //   return;
+      // }
+
+      client.setCACert(rootCACertificate);
+
+      Serial.println("\n[https] Starting connection to server...");
+      if (!client.connect(server, 443))
+        Serial.println("[https] Connection failed!");
+      else {
+        Serial.println("[https] Connected to server!");
+        // Make a HTTP request:
+        client.println( "GET /api/get?name="+String(APRS_FI_NAME)+"&what=wx&apikey="+String(APRS_FI_APIKEY)+"&format=json HTTP/1.1" );
+        client.println("Host: api.aprs.fi");
+        client.println("Connection: close");
+        client.println();
+
+        while (client.connected()) {
+          String line = client.readStringUntil('\n');
+          if (line == "\r") {
+            Serial.println("[https] headers received");
+            break;
+          }
+        }
+
+        jsonString = "";
+        while (client.available()) {
+          char c = client.read();
+          jsonString = jsonString + String(c);
+          // Serial.write(c);
+        }
+        int indexStart = jsonString.indexOf("{");
+        int indexEnd = jsonString.indexOf("]");
+        jsonString = jsonString.substring(indexStart,indexEnd+2);
+        Serial.print("[https RX] ");
+        Serial.println(jsonString);
+        RxMqttTimer=millis();
+
+        client.stop();
+        Serial.println("[https] stop");
+
+        Serial.println("[json] start extract");
+        String posStr = jsonExtract(jsonString, "entries");
+        Serial.println("[json] extract temp");
+        Temperature = jsonExtract(posStr, "temp").toFloat();
+        Serial.println("[json] extract rain");
+        RainToday = jsonExtract(posStr, "rain_mn").toFloat();
+        HumidityRel = jsonExtract(posStr, "humidity").toFloat();
+        DewPoint = (float)Temperature - (100.0 - constrain(HumidityRel, 0, 100)) / 5.0;
+        Pressure = jsonExtract(posStr, "pressure").toFloat();
+        WindDir = jsonExtract(posStr, "wind_direction").toInt();
+        WindSpeedMaxPeriod = jsonExtract(posStr, "wind_gust").toFloat();
+
+        // Temperature = doc["entries"][0]["temp"];
+        // RainToday = doc["entries"][0]["rain_mn"];
+        // HumidityRel = doc["entries"][0]["humidity"];
+        // Pressure = doc["entries"][0]["pressure"];
+        // WindDir = doc["entries"][0]["wind_direction"];
+        // WindSpeedMaxPeriod = doc["entries"][0]["wind_gust"];
+
+        Serial.println("[json] Temperature: "+String(Temperature));
+        Serial.println("[json] RainToday: "+String(RainToday));
+        Serial.println("[json] HumidityRel: "+String(HumidityRel));
+        Serial.println("[json] DewPoint: "+String(DewPoint));
+        Serial.println("[json] Pressure: "+String(Pressure));
+        Serial.println("[json] WindDir: "+String(WindDir));
+        Serial.println("[json] WindSpeedMaxPeriod: "+String(WindSpeedMaxPeriod));
+
+        eInkNeedRefresh=true;
+        RxMqttTimer=millis();
       }
 
-      Temperature = doc["entries"][0]["temp"];
-      RainToday = doc["entries"][0]["rain_mn"];
-      HumidityRel = doc["entries"][0]["humidity"];
-      DewPoint = (float)Temperature - (100.0 - constrain(HumidityRel, 0, 100)) / 5.0;
-      Pressure = doc["entries"][0]["pressure"];
-      WindDir = doc["entries"][0]["wind_direction"];
-      WindSpeedMaxPeriod = doc["entries"][0]["wind_gust"];
-
-      Serial.println("[json] Temperature: "+String(Temperature));
-      Serial.println("[json] RainToday: "+String(RainToday));
-      Serial.println("[json] HumidityRel: "+String(HumidityRel));
-      Serial.println("[json] DewPoint: "+String(DewPoint));
-      Serial.println("[json] Pressure: "+String(Pressure));
-      Serial.println("[json] WindDir: "+String(WindDir));
-      Serial.println("[json] WindSpeedMaxPeriod: "+String(WindSpeedMaxPeriod));
-
-      aprsfiTimer=millis();
-      eInkNeedRefresh=true;
-      RxMqttTimer=millis();
     }
   #endif
 
@@ -749,7 +797,7 @@ void Watchdog(){
         display.fillCircle(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), dot1, GxEPD_WHITE);
       }
     }
-    if( (WindSpeedMaxPeriod>0 && mainHWdeviceSelect==1) || mainHWdeviceSelect==0){
+    if( (WindSpeedMaxPeriod>0 && mainHWdeviceSelect==1) || mainHWdeviceSelect==2){
       Arrow(deg,X,Y,R*0.9);
     }
 }
