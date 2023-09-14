@@ -45,9 +45,7 @@ Použití knihovny GxEPD2 ve verzi 1.5.2 v adresáři: /home/dan/Arduino/librari
 Použití knihovny Adafruit_GFX_Library ve verzi 1.11.3 v adresáři: /home/dan/Arduino/libraries/Adafruit_GFX_Library
 Použití knihovny Adafruit_BusIO ve verzi 1.14.1 v adresáři: /home/dan/Arduino/libraries/Adafruit_BusIO
 Použití knihovny Wire ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/Wire
-Použití knihovny WiFiClientSecure ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/WiFiClientSecure
 Použití knihovny WiFi ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/WiFi
-Použití knihovny jsonlib ve verzi 0.1.1 v adresáři: /home/dan/Arduino/libraries/jsonlib
 Použití knihovny AsyncTCP ve verzi 1.1.1 v adresáři: /home/dan/Arduino/libraries/AsyncTCP
 Použití knihovny ESPAsyncWebServer ve verzi 1.2.3 v adresáři: /home/dan/Arduino/libraries/ESPAsyncWebServer
 Použití knihovny AsyncElegantOTA ve verzi 2.2.7 v adresáři: /home/dan/Arduino/libraries/AsyncElegantOTA
@@ -60,10 +58,10 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20230910
+#define REV 20230914
 #define OTAWEB                    // enable upload firmware via web
 #define MQTT                      // enable MQTT
-#define APRSFI                    // enable get from aprs.fi
+// #define APRSFI                 // enable get from aprs.fi
 #include <esp_adc_cal.h>
 #include <FS.h>
 #include <SD.h>
@@ -128,6 +126,8 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 #include "Logisoso10pt7b.h"
 #include "Logisoso50pt7b.h"
 // display.setFont(&Logisoso250pt7b);
+uint16_t colorB = GxEPD_BLACK;
+uint16_t colorW = GxEPD_WHITE;
 
 // #define SLEEP                    // Uncomment so board goes to sleep after printing on display
 #define uS_TO_S_FACTOR 1000000ULL // Conversion factor for micro seconds to seconds
@@ -155,7 +155,8 @@ String APRS_FI_APIKEY = "";
 
 unsigned int eInkRotation = 1; // 1 USB TOP, 3 USB DOWN | 0 default, 1 90°CW, 2 180°CW, 3 90°CCW
 int OfflineTimeout = 5;   // minutes
-bool eInkNegativ = true;  // not implemented!
+bool eInkNegativ = false;
+bool eInkNegativTmp = false;
 int DesignSkin = 0;       // not implemented!
 // #define SDTEST_TEXT_PADDING 25
 #define SD_CS 27
@@ -199,6 +200,11 @@ const char* ntpServer = "pool.ntp.org";
 // const char* ntpServer = "time.google.com";
 const long  gmtOffset_sec = 0;
 const int   daylightOffset_sec = 0;
+
+// 1000 seconds WDT (WatchDogTimer)
+#include <esp_task_wdt.h>
+#define WDT_TIMEOUT 1000
+long WdtTimer=0;
 
 int DebuggingOutput = 1;  // 0-off | 1-Serial
 
@@ -254,8 +260,8 @@ void setup(void) {
 
   if(SdCardPresentStatus != true) {
     Serial.print("micro SD card is not inserted");
-    display.fillScreen(GxEPD_WHITE);
-    display.setTextColor(GxEPD_BLACK);
+    display.fillScreen(colorW);
+    display.setTextColor(colorB);
     display.setFont(&Logisoso10pt7b);
     display.setCursor(30, 120);
     display.println("!");
@@ -273,24 +279,24 @@ void setup(void) {
   }
   SDtest();
 
-  display.fillScreen(GxEPD_BLACK);
-  display.setTextColor(GxEPD_WHITE);
+  display.fillScreen(colorB);
+  display.setTextColor(colorW);
   display.setFont(&Logisoso10pt7b);
   display.setCursor(70, 150);
   display.println("Connecting");
   display.setFont(&Logisoso8pt7b);
   display.setCursor(90, 190);
   display.println("MicroSD import "+String(microSDlines)+" values");
-    display.fillCircle(80, 190-7, 3, GxEPD_WHITE);
+    display.fillCircle(80, 190-7, 3, colorW);
   display.setCursor(90, 220);
   display.println("WiFi "+String(SSID)+"...");
-    display.fillCircle(80, 220-7, 3, GxEPD_WHITE);
+    display.fillCircle(80, 220-7, 3, colorW);
   display.setFont(&Logisoso8pt7b);
   display.setCursor(200, 385);
   display.print(REV);
   display.display(false);
 
-  // display.fillScreen(GxEPD_BLACK);
+  // display.fillScreen(colorB);
 
   #if defined(WIFI)
     // WiFi.disconnect(true);
@@ -316,23 +322,23 @@ void setup(void) {
     Serial.println(WiFi.RSSI());
 
     if(mainHWdeviceSelect==2){
-      display.fillScreen(GxEPD_BLACK);
-      display.setTextColor(GxEPD_WHITE);
+      display.fillScreen(colorB);
+      display.setTextColor(colorW);
       display.setFont(&Logisoso10pt7b);
       display.setCursor(70, 150);
       display.println("Connecting");
       display.setFont(&Logisoso8pt7b);
       display.setCursor(90, 190);
       display.println("MicroSD import "+String(microSDlines)+" values");
-      display.fillCircle(80, 190-7, 3, GxEPD_WHITE);
+      display.fillCircle(80, 190-7, 3, colorW);
       display.setCursor(90, 220);
       display.println("WiFi "+String(SSID)+" "+String(WiFi.RSSI())+" dBm");
-      display.fillCircle(80, 220-7, 3, GxEPD_WHITE);
+      display.fillCircle(80, 220-7, 3, colorW);
       display.setCursor(90, 250);
       display.println(WiFi.localIP());
-      display.fillCircle(80, 250-7, 3, GxEPD_WHITE);
+      display.fillCircle(80, 250-7, 3, colorW);
       display.setCursor(90, 280);
-      display.fillCircle(80, 280-7, 3, GxEPD_WHITE);
+      display.fillCircle(80, 280-7, 3, colorW);
       display.println(String(mainHWdevice[mainHWdeviceSelect][1])+"/"+String(APRS_FI_NAME)+"...");
       display.setFont(&Logisoso8pt7b);
       display.setCursor(15, 385);
@@ -384,6 +390,12 @@ void setup(void) {
   #if defined(APRSFI)
     jsonString.reserve(900);
   #endif
+
+  // WDT
+  esp_task_wdt_init(WDT_TIMEOUT, true); //enable panic so ESP32 restarts
+  esp_task_wdt_add(NULL); //add current thread to WDT watch
+  WdtTimer=millis();
+
 }
 
 //-------------------------------------------------------------------------------------------------------
@@ -449,17 +461,17 @@ void eInkRefresh(){
   static long eInkRefreshTimer = -5000;
   // ROT
   if( mainHWdeviceSelect==0 && eInkNeedRefresh==true && millis()-eInkRefreshTimer > 5000 && Azimuth!=-42 && Name != "" ){
-      display.fillScreen(GxEPD_BLACK);
+      display.fillScreen(colorB);
 
       #if defined(BMPMAP)
-        display.drawBitmap(0, 0, ok, 300, 300, GxEPD_WHITE);
+        display.drawBitmap(0, 0, ok, 300, 300, colorW);
       #endif
 
       if(Azimuth>=0){
         DirectionalRosette(AzimuthShifted(Azimuth), 150, 145, 130);
       }
 
-      display.setTextColor(GxEPD_WHITE);
+      display.setTextColor(colorW);
       display.setFont(&Logisoso50pt7b);
       /*
       char to - (minus) width 39px
@@ -479,7 +491,7 @@ void eInkRefresh(){
         // display.setCursor(270, 310);
         // display.setFont(&Logisoso10pt7b);
         // display.println("o");
-        display.fillCircle(275, 300, 6, GxEPD_WHITE);
+        display.fillCircle(275, 300, 6, colorW);
       }else{
         display.setCursor(170, 355);
         display.println("n/a");
@@ -512,9 +524,12 @@ void eInkRefresh(){
       eInkRefreshTimer=millis();
     // WX
     }else if( (mainHWdeviceSelect==1 || mainHWdeviceSelect==2) && eInkNeedRefresh==true && millis()-eInkRefreshTimer > 10000 ){
-        display.fillScreen(GxEPD_BLACK);
+      // Serial.println("eInk eInkNegativ "+String(eInkNegativ));
+      // Serial.println("eInk colorB "+String(colorB));
+      // Serial.println("eInk colorW "+String(colorW));
+        display.fillScreen(colorB);
 
-        display.setTextColor(GxEPD_WHITE);
+        display.setTextColor(colorW);
         display.setFont(&Logisoso50pt7b);
         int Xshift=0;
         if(Temperature<0){
@@ -532,11 +547,11 @@ void eInkRefresh(){
         display.println(String(subStr));
         display.setCursor(242, 85);
         display.println("C");
-        display.fillCircle(230, 25, 6, GxEPD_WHITE);
+        display.fillCircle(230, 25, 6, colorW);
 
         display.drawLine(15, 100, 285, 100, 2);
         float XX = (285.0-15.0)/100.0*HumidityRel+15.0;
-        display.fillCircle((int)XX, 100, 3, GxEPD_WHITE);
+        display.fillCircle((int)XX, 100, 3, colorW);
 
         display.setFont(&Logisoso8pt7b);
         display.setCursor(15, 125);
@@ -562,14 +577,14 @@ void eInkRefresh(){
           display.print("  RAIN "+String(subStr)+" mm");
           int ten = (int)RainToday % 10;
           if(RainToday>0 && RainToday<1){
-            display.fillCircle(285-1*(11+1), 170, 3+1, GxEPD_WHITE);
+            display.fillCircle(285-1*(11+1), 170, 3+1, colorW);
           }
           for (int j=ten; j>0; j--) {
-            display.fillCircle(285-j*(11+j), 170, 3+j, GxEPD_WHITE);
+            display.fillCircle(285-j*(11+j), 170, 3+j, colorW);
           }
           int tens = (int)(RainToday/10);
           for (int j=tens; j>0; j--) {
-            display.fillCircle(j*30-5, 170, 13, GxEPD_WHITE);
+            display.fillCircle(j*30-5, 170, 13, colorW);
           }
         }
 
@@ -628,7 +643,7 @@ void eInkRefresh(){
 //------------------------------------------------------------------------------
 void Triangle(float VALUE, float MIN, float MAX){
   float YY = 400.0-(VALUE - MIN) * (400.0/(MAX-MIN));
-  display.fillTriangle(0, (int)YY-5, 14, (int)YY, 0, (int)YY+5, GxEPD_WHITE);
+  display.fillTriangle(0, (int)YY-5, 14, (int)YY, 0, (int)YY+5, colorW);
   // Serial.println("Triangle Ypx: "+String(YY));
 }
 
@@ -642,7 +657,22 @@ int AzimuthShifted(int DEG){
 }
 
 //-------------------------------------------------------------------------------------------------------
+void WDTimer(){
+  eInkOfflineDetect = false;
+  // WDT
+  esp_task_wdt_reset();
+}
+
+//-------------------------------------------------------------------------------------------------------
 void Watchdog(){
+
+  // // WDT
+  // if(millis()-WdtTimer > 960000){
+  //   esp_task_wdt_reset();
+  //   WdtTimer=millis();
+  //   Serial.print("WDT reset ");
+  //   Serial.println(UtcTime(1));
+  // }
 
   #if defined(APRSFI)
     static long aprsfiTimer = -900000;
@@ -743,14 +773,39 @@ void Watchdog(){
     SdCardTimer = millis();
   }
 
+  static bool eInkOfflineDetectTmp = false;
   if( (millis()-RxMqttTimer) > OfflineTimeout*60000 && eInkOfflineDetect == false ){
     eInkNeedRefresh=true;
     eInkOfflineDetect = true;
+    eInkOfflineDetectTmp = eInkOfflineDetect;
     Serial.print(millis());
     Serial.print(" | ");
     Serial.print(OfflineTimeout);
     Serial.println(" minutes offline timeout");
   }
+
+  if(eInkOfflineDetect!=eInkOfflineDetectTmp){
+    eInkNegativ = !eInkNegativ;
+    eInkOfflineDetectTmp = eInkOfflineDetect;
+  }
+
+  // static unsigned long eInkNegativTimer = millis();
+  // if(millis()-eInkNegativTimer > 10000 || eInkNeedRefresh==true){
+    if(eInkNegativ!=eInkNegativTmp){
+      if(eInkNegativ==true){
+        colorB = GxEPD_BLACK;
+        colorW = GxEPD_WHITE;
+        eInkNegativTmp=true;
+      }else{
+        colorB = GxEPD_WHITE;
+        colorW = GxEPD_BLACK;
+        eInkNegativTmp=false;
+      }
+      // Serial.println("wd eInkNegativ "+String(eInkNegativ));
+      // Serial.println("wd colorB "+String(colorB));
+      // Serial.println("wd colorW "+String(colorW));
+    }
+  // }
 
   #if defined(WIFI)
     unsigned long currentMillis = millis();
@@ -791,10 +846,10 @@ void Watchdog(){
     for (int j=0; j<36; j++) {
       if(j % 9 == 0){
         if(R<100){
-          display.fillCircle(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), dot2, GxEPD_WHITE);
+          display.fillCircle(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), dot2, colorW);
         }
       }else{
-        display.fillCircle(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), dot1, GxEPD_WHITE);
+        display.fillCircle(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), dot1, colorW);
       }
     }
     if( (WindSpeedMaxPeriod>0 && mainHWdeviceSelect==1) || mainHWdeviceSelect==2){
@@ -806,10 +861,10 @@ void Watchdog(){
 void Arrow(int deg, int X, int Y, int r){
   int deg2 = deg+130;
   int deg3 = deg+230;
-  display.fillTriangle(Xcoordinate(deg,X,r), Ycoordinate(deg,Y,r), Xcoordinate(deg2,X,r/2), Ycoordinate(deg2,Y,r/2), Xcoordinate(deg+180,X,0), Ycoordinate(deg+180,Y,0), GxEPD_WHITE);
-  display.fillTriangle(Xcoordinate(deg,X,r), Ycoordinate(deg,Y,r), Xcoordinate(deg3,X,r/2), Ycoordinate(deg3,Y,r/2), Xcoordinate(deg+180,X,0), Ycoordinate(deg+180,Y,0), GxEPD_WHITE);
-  display.fillTriangle(Xcoordinate(deg+180,X,r), Ycoordinate(deg+180,Y,r), Xcoordinate(deg3,X,r/10), Ycoordinate(deg3,Y,r/10), Xcoordinate(deg+180,X,0), Ycoordinate(deg+180,Y,0), GxEPD_WHITE);
-  display.fillTriangle(Xcoordinate(deg+180,X,r), Ycoordinate(deg+180,Y,r), Xcoordinate(deg2,X,r/10), Ycoordinate(deg2,Y,r/10), Xcoordinate(deg+180,X,0), Ycoordinate(deg+180,Y,0), GxEPD_WHITE);
+  display.fillTriangle(Xcoordinate(deg,X,r), Ycoordinate(deg,Y,r), Xcoordinate(deg2,X,r/2), Ycoordinate(deg2,Y,r/2), Xcoordinate(deg+180,X,0), Ycoordinate(deg+180,Y,0), colorW);
+  display.fillTriangle(Xcoordinate(deg,X,r), Ycoordinate(deg,Y,r), Xcoordinate(deg3,X,r/2), Ycoordinate(deg3,Y,r/2), Xcoordinate(deg+180,X,0), Ycoordinate(deg+180,Y,0), colorW);
+  display.fillTriangle(Xcoordinate(deg+180,X,r), Ycoordinate(deg+180,Y,r), Xcoordinate(deg3,X,r/10), Ycoordinate(deg3,Y,r/10), Xcoordinate(deg+180,X,0), Ycoordinate(deg+180,Y,0), colorW);
+  display.fillTriangle(Xcoordinate(deg+180,X,r), Ycoordinate(deg+180,Y,r), Xcoordinate(deg2,X,r/10), Ycoordinate(deg2,Y,r/10), Xcoordinate(deg+180,X,0), Ycoordinate(deg+180,Y,0), colorW);
 }
 
 //-------------------------------------------------------------------------------------------------------
@@ -987,31 +1042,31 @@ bool mqttReconnect() {
         }
 
       // }
-      display.fillScreen(GxEPD_BLACK);
-      display.setTextColor(GxEPD_WHITE);
+      display.fillScreen(colorB);
+      display.setTextColor(colorW);
       display.setFont(&Logisoso10pt7b);
       display.setCursor(70, 150);
       display.println("Connecting");
       display.setFont(&Logisoso8pt7b);
       display.setCursor(90, 190);
       display.println("MicroSD import "+String(microSDlines)+" values");
-      display.fillCircle(80, 190-7, 3, GxEPD_WHITE);
+      display.fillCircle(80, 190-7, 3, colorW);
       display.setCursor(90, 220);
       display.println("WiFi "+String(SSID)+" "+String(WiFi.RSSI())+" dBm");
-      display.fillCircle(80, 220-7, 3, GxEPD_WHITE);
+      display.fillCircle(80, 220-7, 3, colorW);
       display.setCursor(90, 250);
       display.println(WiFi.localIP());
-      display.fillCircle(80, 250-7, 3, GxEPD_WHITE);
+      display.fillCircle(80, 250-7, 3, colorW);
       display.setCursor(90, 280);
       if(mainHWdeviceSelect==0 || mainHWdeviceSelect==1){
         display.println("MQTT "+String(TOPIC)+"#");
       }else{
         display.println("MQTT disable");
       }
-      display.fillCircle(80, 280-7, 3, GxEPD_WHITE);
+      display.fillCircle(80, 280-7, 3, colorW);
       display.setCursor(90, 310);
       display.println(String(mainHWdevice[mainHWdeviceSelect][1])+"...");
-      display.fillCircle(80, 310-7, 3, GxEPD_WHITE);
+      display.fillCircle(80, 310-7, 3, colorW);
       display.setFont(&Logisoso8pt7b);
       display.setCursor(15, 385);
       UtcTime(1).toCharArray(buf, 21);
@@ -1088,7 +1143,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         MqttPubString("get", "4eink", false);
       // }
       RxMqttTimer=millis();
-      eInkOfflineDetect = false;
+      WDTimer();
       eInkNeedRefresh=true;
     }
 
@@ -1103,7 +1158,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
           eInkNeedRefresh=true;
           AzimuthTmp=Azimuth;
         }
-        eInkOfflineDetect = false;
+        WDTimer();
       }
 
       CheckTopicBase = String(ROT_TOPIC) + "StartAzimuth";
@@ -1133,7 +1188,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         Temperature = payloadToFloat(payload, length);
         Serial.println("Temperature-Celsius "+String(Temperature)+"°");
         RxMqttTimer=millis();
-        eInkOfflineDetect = false;
+        WDTimer();
         eInkNeedRefresh=true;
       }
 
@@ -1142,7 +1197,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         RainToday = payloadToFloat(payload, length);
         Serial.println("RainToday-mm "+String(RainToday)+" mm");
         RxMqttTimer=millis();
-        eInkOfflineDetect = false;
+        WDTimer();
         // eInkNeedRefresh=true;
       }
 
@@ -1151,7 +1206,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         HumidityRel=payloadToFloat(payload, length);
         Serial.println("HumidityRel-Percent-HTU21D "+String(HumidityRel)+"%");
         RxMqttTimer=millis();
-        eInkOfflineDetect = false;
+        WDTimer();
         // eInkNeedRefresh=true;
       }
 
@@ -1160,7 +1215,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         DewPoint=payloadToFloat(payload, length);
         Serial.println("DewPoint-Celsius-HTU21D "+String(DewPoint)+"°");
         RxMqttTimer=millis();
-        eInkOfflineDetect = false;
+        WDTimer();
         // eInkNeedRefresh=true;
       }
 
@@ -1169,7 +1224,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         Pressure=payloadToFloat(payload, length);
         Serial.println("Pressure-hPa-BMP280 "+String(Pressure)+" hpa");
         RxMqttTimer=millis();
-        eInkOfflineDetect = false;
+        WDTimer();
         // eInkNeedRefresh=true;
       }
 
@@ -1178,7 +1233,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         WindDir=(int)payloadToFloat(payload, length);
         Serial.println("WindDir-azimuth "+String(WindDir)+"°az");
         RxMqttTimer=millis();
-        eInkOfflineDetect = false;
+        WDTimer();
         // eInkNeedRefresh=true;
       }
 
@@ -1187,7 +1242,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         WindSpeedAvg=payloadToFloat(payload, length);
         Serial.println("WindSpeedAvg-mps "+String(WindSpeedAvg)+" m/s");
         RxMqttTimer=millis();
-        eInkOfflineDetect = false;
+        WDTimer();
         // eInkNeedRefresh=true;
       }
 
@@ -1196,7 +1251,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         WindSpeedMaxPeriod=payloadToFloat(payload, length);
         Serial.println("WindSpeedMaxPeriod-mps "+String(WindSpeedMaxPeriod)+" m/s");
         RxMqttTimer=millis();
-        eInkOfflineDetect = false;
+        WDTimer();
         // eInkNeedRefresh=true;
       }
 
@@ -1313,8 +1368,8 @@ void SDtest(){
         Serial.println("SD card not found");
       }
       if(intCount==1){
-        display.fillScreen(GxEPD_WHITE);
-        display.setTextColor(GxEPD_BLACK);
+        display.fillScreen(colorW);
+        display.setTextColor(colorB);
         display.setFont(&Logisoso10pt7b);
         display.setCursor(40, 120);
         display.println("!");
@@ -1343,8 +1398,8 @@ void SDtest(){
   if(!SD.exists(charConfigFile)){
     Serial.print(ConfigFile);
     Serial.println(" not found");
-    display.fillScreen(GxEPD_WHITE);
-    display.setTextColor(GxEPD_BLACK);
+    display.fillScreen(colorW);
+    display.setTextColor(colorB);
     display.setFont(&Logisoso10pt7b);
     display.setCursor(40, 120);
     display.println("!");
@@ -1365,15 +1420,15 @@ void SDtest(){
   Serial.print("load ");
   Serial.println(ConfigFile);
 
-  display.fillScreen(GxEPD_BLACK);
-  display.setTextColor(GxEPD_WHITE);
+  display.fillScreen(colorB);
+  display.setTextColor(colorW);
   display.setFont(&Logisoso10pt7b);
   display.setCursor(70, 150);
   display.println("Connecting");
   display.setFont(&Logisoso8pt7b);
   display.setCursor(90, 190);
   display.println("MicroSD...");
-    display.fillCircle(80, 190-7, 3, GxEPD_WHITE);
+    display.fillCircle(80, 190-7, 3, colorW);
   display.setFont(&Logisoso8pt7b);
   display.setCursor(200, 385);
   display.print(REV);
@@ -1476,7 +1531,17 @@ void readSDSettings(){
           microSDlines++;
         }else if(settingName == "eInkNegativ"){
           eInkNegativ = (bool)settingValue.toInt();
-          // Serial.println("   eInkNegativ="+String(eInkNegativ));
+          if(eInkNegativ==true){
+            colorB = GxEPD_BLACK;
+            colorW = GxEPD_WHITE;
+            eInkNegativTmp=true;
+          }else{
+            colorB = GxEPD_WHITE;
+            colorW = GxEPD_BLACK;
+            eInkNegativTmp=false;
+          }
+          // Serial.println("sd   eInkNegativ="+String(eInkNegativ));
+          // Serial.println("sd   eInkNegativTmp="+String(eInkNegativTmp));
           microSDlines++;
         }else if(settingName == "DesignSkin"){
           DesignSkin = (int)settingValue.toInt();

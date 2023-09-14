@@ -40,7 +40,7 @@
 
 ## Picture
 
-<img src="https://raw.githubusercontent.com/ok1hra/esp32-e-ink/main/img/rot6.png" height="200">
+<img src="https://raw.githubusercontent.com/ok1hra/esp32-e-ink/main/img/rot6.png" height="200"><img src="https://raw.githubusercontent.com/ok1hra/esp32-e-ink/main/img/light-mode.jpg" height="200">
 
 <img src="https://raw.githubusercontent.com/ok1hra/esp32-e-ink/main/img/rot7.jpg" height="200"><img src="https://raw.githubusercontent.com/ok1hra/esp32-e-ink/main/img/rot10.jpg" height="200">
 
