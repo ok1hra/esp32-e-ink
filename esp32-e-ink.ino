@@ -58,7 +58,7 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20230914
+#define REV 20230923
 #define OTAWEB                    // enable upload firmware via web
 #define MQTT                      // enable MQTT
 // #define APRSFI                 // enable get from aprs.fi
@@ -985,7 +985,7 @@ bool mqttReconnect() {
           Serial.println(String(cstr4));
         }
 
-        topic = String(WX_TOPIC) + "HumidityRel-Percent-HTU21D";
+        topic = String(WX_TOPIC) + "HumidityRel-Percent";
         topic.reserve(50);
         const char *cstr5 = topic.c_str();
         if(mqttClient.subscribe(cstr5)==true){
@@ -993,7 +993,7 @@ bool mqttReconnect() {
           Serial.println(String(cstr5));
         }
 
-        topic = String(WX_TOPIC) + "Pressure-hPa-BMP280";
+        topic = String(WX_TOPIC) + "Pressure-hPa";
         topic.reserve(50);
         const char *cstr6 = topic.c_str();
         if(mqttClient.subscribe(cstr6)==true){
@@ -1025,7 +1025,7 @@ bool mqttReconnect() {
           Serial.println(String(cstr9));
         }
 
-        topic = String(WX_TOPIC) + "DewPoint-Celsius-HTU21D";
+        topic = String(WX_TOPIC) + "DewPoint-Celsius";
         topic.reserve(50);
         const char *cstr10 = topic.c_str();
         if(mqttClient.subscribe(cstr10)==true){
@@ -1201,28 +1201,28 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         // eInkNeedRefresh=true;
       }
 
-      CheckTopicBase = String(WX_TOPIC) + "HumidityRel-Percent-HTU21D";
+      CheckTopicBase = String(WX_TOPIC) + "HumidityRel-Percent";
       if ( CheckTopicBase.equals( String(topic) )){
         HumidityRel=payloadToFloat(payload, length);
-        Serial.println("HumidityRel-Percent-HTU21D "+String(HumidityRel)+"%");
+        Serial.println("HumidityRel-Percent "+String(HumidityRel)+"%");
         RxMqttTimer=millis();
         WDTimer();
         // eInkNeedRefresh=true;
       }
 
-      CheckTopicBase = String(WX_TOPIC) + "DewPoint-Celsius-HTU21D";
+      CheckTopicBase = String(WX_TOPIC) + "DewPoint-Celsius";
       if ( CheckTopicBase.equals( String(topic) )){
         DewPoint=payloadToFloat(payload, length);
-        Serial.println("DewPoint-Celsius-HTU21D "+String(DewPoint)+"°");
+        Serial.println("DewPoint-Celsius "+String(DewPoint)+"°");
         RxMqttTimer=millis();
         WDTimer();
         // eInkNeedRefresh=true;
       }
 
-      CheckTopicBase = String(WX_TOPIC) + "Pressure-hPa-BMP280";
+      CheckTopicBase = String(WX_TOPIC) + "Pressure-hPa";
       if ( CheckTopicBase.equals( String(topic) )){
         Pressure=payloadToFloat(payload, length);
-        Serial.println("Pressure-hPa-BMP280 "+String(Pressure)+" hpa");
+        Serial.println("Pressure-hPa "+String(Pressure)+" hpa");
         RxMqttTimer=millis();
         WDTimer();
         // eInkNeedRefresh=true;
