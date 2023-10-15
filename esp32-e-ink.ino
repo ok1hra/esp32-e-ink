@@ -58,9 +58,10 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20230923
+#define REV 20231015
 #define OTAWEB                    // enable upload firmware via web
 #define MQTT                      // enable MQTT
+// #define DISABLE_SD                // disable SD card - configure maunaly in setup(void)
 // #define APRSFI                 // enable get from aprs.fi
 #include <esp_adc_cal.h>
 #include <FS.h>
@@ -242,7 +243,47 @@ unsigned int RunApp = 255;
 #endif
 
 //-------------------------------------------------------------------------------------------------------
-void setup(void) {
+void setup(void){
+  #if defined(DISABLE_SD)
+  //----------- manual config -----------
+    mainHWdeviceSelect=1;   // 0 = IP rotator, 1 = WX station, 2 = aprs.fi (get every 15 minutes) - not works!
+    SSID="SSID";                 // (all) Wifi SSID (max 20 characters)
+    PSWD="PASSWORD";       // (all) Wifi password (max 20 characters)
+    eInkRotation=1;         // (all) 1 = USB on top, 3 = USB downside (0 default, 1 90°CW, 2 180°CW, 3 90°CCW)
+    ROT_TOPIC="OK1HRA/0";   // (0) part of MQTT topic CALLSIGN/NR. Must be same as on IP rotator.
+    WX_TOPIC="OK1HRA-7";    // (1) part of MQTT topic CALLSIGN. Must be same as on WX station.
+    mqttBroker[0]=54;         // (0/1) MQTT broker IP for IP rotator and WX station
+    mqttBroker[1]=38;         // (0/1) Must be same as on main device.
+    mqttBroker[2]=157;        // (0/1)
+    mqttBroker[3]=134;        // (0/1) default 54.38.157.134 (remoteqth.com)
+    MQTT_PORT=1883;         // (0/1) MQTT broker port. Must be same as on main device.
+    OfflineTimeout=6;       // (0/1) minutes
+    eInkNegativ=1;          // (all) 1 = Dark mode (default), 0 = Light mode
+    DesignSkin=0;           // not implemented!
+    APRS_FI_NAME="OK1HRA-7";// (2) your CALLSIGN on aprs.fi - not works!
+    APRS_FI_APIKEY="key";   // (2) API key get from https://aprs.fi/account/ - not works!
+  //----------- manual config end -----------
+
+    mqtt_server_ip = mqttBroker;
+    display.setRotation(eInkRotation); // 1 USB TOP, 3 USB DOWN | 0 default, 1 90°CW, 2 180°CW, 3 90°CCW
+    if(eInkNegativ==true){
+      colorB = GxEPD_BLACK;
+      colorW = GxEPD_WHITE;
+      eInkNegativTmp=true;
+    }else{
+      colorB = GxEPD_WHITE;
+      colorW = GxEPD_BLACK;
+      eInkNegativTmp=false;
+    }
+    ROT_TOPIC = String(ROT_TOPIC)+String(mainHWdevice[0][0]);
+    WX_TOPIC = String(WX_TOPIC)+String(mainHWdevice[1][0]);
+    if(mainHWdeviceSelect==0){
+      TOPIC = ROT_TOPIC;
+    }else if(mainHWdeviceSelect==1){
+      TOPIC = WX_TOPIC;
+    }
+  #endif
+
   pinMode(SdCardPresentPin, INPUT);
   pinMode(2, OUTPUT);    // Set epaper transistor as output
   digitalWrite(2, HIGH); // Surn on epaper transistor
@@ -255,46 +296,48 @@ void setup(void) {
   Serial.print("e-ink rev ");
   Serial.println(REV);
 
-  SdCardPresentStatus=!digitalRead(SdCardPresentPin);
-  Serial.println("Check microSD ");
+  #if !defined(DISABLE_SD)
+    SdCardPresentStatus=!digitalRead(SdCardPresentPin);
+    Serial.println("Check microSD ");
 
-  if(SdCardPresentStatus != true) {
-    Serial.print("micro SD card is not inserted");
-    display.fillScreen(colorW);
-    display.setTextColor(colorB);
-    display.setFont(&Logisoso10pt7b);
-    display.setCursor(30, 120);
-    display.println("!");
-    display.setCursor(30, 160);
-    display.println("micro SD card is not inserted");
-    display.setCursor(30, 190);
-    display.println("Please insert card with");
-    display.setCursor(30, 220);
-    display.println("setup.cfg config file");
-    display.display(false);
-    while(SdCardPresentStatus != true) {
-      delay(1000);
-      SdCardPresentStatus=!digitalRead(SdCardPresentPin);
+    if(SdCardPresentStatus != true) {
+      Serial.print("micro SD card is not inserted");
+      display.fillScreen(colorW);
+      display.setTextColor(colorB);
+      display.setFont(&Logisoso10pt7b);
+      display.setCursor(30, 120);
+      display.println("!");
+      display.setCursor(30, 160);
+      display.println("micro SD card is not inserted");
+      display.setCursor(30, 190);
+      display.println("Please insert card with");
+      display.setCursor(30, 220);
+      display.println("setup.cfg config file");
+      display.display(false);
+      while(SdCardPresentStatus != true) {
+        delay(1000);
+        SdCardPresentStatus=!digitalRead(SdCardPresentPin);
+      }
     }
-  }
-  SDtest();
+    SDtest();
 
-  display.fillScreen(colorB);
-  display.setTextColor(colorW);
-  display.setFont(&Logisoso10pt7b);
-  display.setCursor(70, 150);
-  display.println("Connecting");
-  display.setFont(&Logisoso8pt7b);
-  display.setCursor(90, 190);
-  display.println("MicroSD import "+String(microSDlines)+" values");
-    display.fillCircle(80, 190-7, 3, colorW);
-  display.setCursor(90, 220);
-  display.println("WiFi "+String(SSID)+"...");
-    display.fillCircle(80, 220-7, 3, colorW);
-  display.setFont(&Logisoso8pt7b);
-  display.setCursor(200, 385);
-  display.print(REV);
-  display.display(false);
+    display.fillScreen(colorB);
+    display.setTextColor(colorW);
+    display.setFont(&Logisoso10pt7b);
+    display.setCursor(70, 150);
+    display.println("Connecting");
+    display.setFont(&Logisoso8pt7b);
+    display.setCursor(90, 190);
+    display.println("MicroSD import "+String(microSDlines)+" values");
+      display.fillCircle(80, 190-7, 3, colorW);
+    display.setCursor(90, 220);
+    display.println("WiFi "+String(SSID)+"...");
+      display.fillCircle(80, 220-7, 3, colorW);
+    display.setFont(&Logisoso8pt7b);
+    display.setCursor(200, 385);
+    display.print(REV);
+    display.display(false);
+  #endif
 
   // display.fillScreen(colorB);
 
