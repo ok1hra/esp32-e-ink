@@ -58,10 +58,10 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20231015
+#define REV 20240105
 #define OTAWEB                    // enable upload firmware via web
 #define MQTT                      // enable MQTT
-// #define DISABLE_SD                // disable SD card - configure maunaly in setup(void)
+#define DISABLE_SD                // disable SD card - configure maunaly in setup(void)
 // #define APRSFI                 // enable get from aprs.fi
 #include <esp_adc_cal.h>
 #include <FS.h>
@@ -69,6 +69,15 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 #include <SPI.h>
 #include <GxEPD2_BW.h>
 // #define BMPMAP
+
+// Display GDEW042T2
+GxEPD2_BW<GxEPD2_420, GxEPD2_420::HEIGHT> display(GxEPD2_420(/*CS=5*/ SS, /*DC=*/17, /*RST=*/16, /*BUSY=*/4)); // GDEW042T2 400x300, UC8176 (IL0398)
+
+// Display GDEY042T81
+//GxEPD2_BW<GxEPD2_420_GDEY042T81, GxEPD2_420_GDEY042T81::HEIGHT> display(GxEPD2_420_GDEY042T81(/*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16, /*BUSY=*/ 4)); //GDEY042T81, 400x300, SSD1683 (no inking)
+
+//GxEPD2_3C<GxEPD2_420c_Z21, GxEPD2_420c_Z21::HEIGHT> display(GxEPD2_420c_Z21(/*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16, /*BUSY=*/ 4)); // GDEQ042Z21 400x300, UC8276
+
 #if defined(BMPMAP)
   #include "ok.h"
 #endif
@@ -133,8 +142,6 @@ uint16_t colorW = GxEPD_WHITE;
 // #define SLEEP                    // Uncomment so board goes to sleep after printing on display
 #define uS_TO_S_FACTOR 1000000ULL // Conversion factor for micro seconds to seconds
 #define TIME_TO_SLEEP 10          // Time ESP32 will go to sleep (in seconds)
-GxEPD2_BW<GxEPD2_420, GxEPD2_420::HEIGHT> display(GxEPD2_420(/*CS=5*/ SS, /*DC=*/17, /*RST=*/16, /*BUSY=*/4)); // GDEW042T2 400x300, UC8176 (IL0398)
-//GxEPD2_3C<GxEPD2_420c_Z21, GxEPD2_420c_Z21::HEIGHT> display(GxEPD2_420c_Z21(/*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16, /*BUSY=*/ 4)); // GDEQ042Z21 400x300, UC8276
 
 const String mainHWdevice[4][2] = {
     {"/ROT/", "IP rotator"},  // 0
