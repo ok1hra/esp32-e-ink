@@ -58,17 +58,20 @@ mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20240105
+#define REV 20240328
+// #define USunits                   // enable American metrological units
 #define OTAWEB                    // enable upload firmware via web
 #define MQTT                      // enable MQTT
-#define DISABLE_SD                // disable SD card - configure maunaly in setup(void)
-// #define APRSFI                 // enable get from aprs.fi
+#define DISABLE_SD                // disable SD card - configure maunaly in setup(void) part of code
+// #define APRSFI                 // enable get from aprs.fi - not work
 #include <esp_adc_cal.h>
 #include <FS.h>
 #include <SD.h>
 #include <SPI.h>
 #include <GxEPD2_BW.h>
 // #define BMPMAP
+
+// Select Display hardware type (see on PCB)
 
 // Display GDEW042T2
 GxEPD2_BW<GxEPD2_420, GxEPD2_420::HEIGHT> display(GxEPD2_420(/*CS=5*/ SS, /*DC=*/17, /*RST=*/16, /*BUSY=*/4)); // GDEW042T2 400x300, UC8176 (IL0398)
@@ -253,7 +256,7 @@ unsigned int RunApp = 255;
 void setup(void){
   #if defined(DISABLE_SD)
   //----------- manual config -----------
-    mainHWdeviceSelect=1;   // 0 = IP rotator, 1 = WX station, 2 = aprs.fi (get every 15 minutes) - not works!
+    mainHWdeviceSelect=0;   // 0 = IP rotator, 1 = WX station, 2 = aprs.fi (get every 15 minutes) - not works!
     SSID="SSID";                 // (all) Wifi SSID (max 20 characters)
     PSWD="PASSWORD";       // (all) Wifi password (max 20 characters)
     eInkRotation=1;         // (all) 1 = USB on top, 3 = USB downside (0 default, 1 90°CW, 2 180°CW, 3 90°CCW)
@@ -579,6 +582,13 @@ void eInkRefresh(){
       // Serial.println("eInk colorW "+String(colorW));
         display.fillScreen(colorB);
 
+        #if defined(USunits)
+          Temperature = (Temperature*1.8)+32;
+          DewPoint = (DewPoint*1.8)+32;
+          RainToday = RainToday/25.4;
+          WindSpeedMaxPeriod = WindSpeedMaxPeriod*3.281;
+        #endif
+
         display.setTextColor(colorW);
         display.setFont(&Logisoso50pt7b);
         int Xshift=0;
@@ -596,7 +606,11 @@ void eInkRefresh(){
         String subStr = str.substring(0, str.length() - 1);
         display.println(String(subStr));
         display.setCursor(242, 85);
-        display.println("C");
+        #if defined(USunits)
+          display.println("F");
+        #else
+          display.println("C");
+        #endif
         display.fillCircle(230, 25, 6, colorW);
 
         display.drawLine(15, 100, 285, 100, 2);
@@ -611,7 +625,12 @@ void eInkRefresh(){
         display.setFont(&Logisoso8pt7b);
         display.print("Dew point ");
         display.setFont(&Logisoso10pt7b);
-        display.print(String((int)DewPoint)+" C");
+        display.print(String((int)DewPoint)+" ");
+        #if defined(USunits)
+          display.println("F");
+        #else
+          display.println("C");
+        #endif
 
         display.setCursor(15, 150);
         display.setFont(&Logisoso8pt7b);
@@ -624,7 +643,12 @@ void eInkRefresh(){
         if(RainToday>0){
           str = String(RainToday);
           subStr = str.substring(0, str.length() - 1);
-          display.print("  RAIN "+String(subStr)+" mm");
+          display.print("  RAIN "+String(subStr)+" ");
+          #if defined(USunits)
+            display.println("in");
+          #else
+            display.println("mm");
+          #endif
           int ten = (int)RainToday % 10;
           if(RainToday>0 && RainToday<1){
             display.fillCircle(285-1*(11+1), 170, 3+1, colorW);
@@ -649,7 +673,12 @@ void eInkRefresh(){
           // display.setFont(&Logisoso10pt7b);
           display.setFont(&Logisoso8pt7b);
           display.setCursor(35, 290);
-          display.println("gust m/s");
+          #if defined(USunits)
+            display.println("gust ft/s");
+          #else
+            display.println("gust m/s");
+          #endif
+
         }
 
         // int Pressure = 0;
