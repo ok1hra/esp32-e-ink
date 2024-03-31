@@ -256,7 +256,7 @@ unsigned int RunApp = 255;
 void setup(void){
   #if defined(DISABLE_SD)
   //----------- manual config -----------
-    mainHWdeviceSelect=0;   // 0 = IP rotator, 1 = WX station, 2 = aprs.fi (get every 15 minutes) - not works!
+    mainHWdeviceSelect=1;   // 0 = IP rotator, 1 = WX station, 2 = aprs.fi (get every 15 minutes) - not works!
     SSID="SSID";                 // (all) Wifi SSID (max 20 characters)
     PSWD="PASSWORD";       // (all) Wifi password (max 20 characters)
     eInkRotation=1;         // (all) 1 = USB on top, 3 = USB downside (0 default, 1 90°CW, 2 180°CW, 3 90°CCW)
@@ -931,8 +931,9 @@ void Watchdog(){
         display.fillCircle(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), dot1, colorW);
       }
     }
-    if( (WindSpeedMaxPeriod>0 && mainHWdeviceSelect==1) || mainHWdeviceSelect==2){
+    if( mainHWdeviceSelect==0 || (mainHWdeviceSelect==1 && WindSpeedMaxPeriod>0) || mainHWdeviceSelect==2){
       Arrow(deg,X,Y,R*0.9);
+      Serial.println("Arrow");
     }
 }
 
