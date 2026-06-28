@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <title>ESP32 e-ink — firmware installer</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    :root { --accent: #3b82f6; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+      color: #f1f5f9;
+      background:
+        radial-gradient(circle at top right, rgba(59,130,246,0.25), transparent 30rem),
+        linear-gradient(150deg, #0f172a 0%, #111827 50%, #1e293b 100%);
+      min-height: 100vh;
+    }
+    main { width: min(44rem, calc(100% - 2rem)); margin: 0 auto; padding: 3.5rem 0 5rem; }
+    .card {
+      background: rgba(15,23,42,0.78);
+      border: 1px solid rgba(59,130,246,0.28);
+      border-radius: 1.25rem;
+      padding: 2rem 2rem 2.25rem;
+      box-shadow: 0 2rem 4rem rgba(0,0,0,0.3);
+      backdrop-filter: blur(14px);
+    }
+    h1 { margin: 0 0 0.5rem; font-size: clamp(1.8rem, 4vw, 2.8rem); line-height: 1.1; }
+    .subtitle { margin: 0 0 1.75rem; color: #94a3b8; font-size: 1rem; }
+    .subtitle code { background: rgba(148,163,184,0.15); padding: 0.1rem 0.35rem; border-radius: 0.3rem; color: #93c5fd; }
+    .divider { border: none; border-top: 1px solid rgba(59,130,246,0.2); margin: 1.5rem 0; }
+    h2 { margin: 0 0 0.6rem; font-size: 1.15rem; color: #93c5fd; }
+    p, li { font-size: 0.97rem; line-height: 1.65; color: #cbd5e1; }
+    ul { margin: 0.5rem 0 0; padding-left: 1.35rem; }
+    li { margin-bottom: 0.35rem; }
+    code { background: rgba(148,163,184,0.15); padding: 0.1rem 0.35rem; border-radius: 0.3rem; }
+    .cta { margin-top: 1.5rem; }
+    esp-web-install-button {
+      --esp-tools-button-color: var(--accent);
+      --esp-tools-button-text-color: #fff;
+      --esp-tools-button-border-radius: 999px;
+    }
+    .muted { color: #64748b; font-size: 0.88rem; margin-top: 0.75rem; }
+    a { color: #60a5fa; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="card">
+      <h1>ESP32 e-ink</h1>
+      <p class="subtitle">
+        Firmware installer &mdash; version <code>20260628</code> &nbsp;&bull;&nbsp;
+        <a href="https://github.com/ok1hra/esp32-e-ink" target="_blank">GitHub</a>
+      </p>
+
+      <hr class="divider">
+
+      <h2>1. Flash firmware via USB</h2>
+      <p>
+        Open this page in <strong>Google Chrome</strong> or <strong>Microsoft Edge</strong>
+        (Web Serial is not supported in Firefox or Safari).
+        Connect the board with a <strong>USB-C</strong> cable, then click the button below.
+      </p>
+      <ul>
+        <li>Select the correct <code>CP210x</code> / <code>CH340</code> serial device.</li>
+        <li>Choose <strong>Install ESP32 e-ink</strong> and follow the prompts.</li>
+      </ul>
+
+      <div class="cta">
+        <esp-web-install-button manifest="manifest.json" baudrate="115200"></esp-web-install-button>
+      </div>
+
+      <hr class="divider">
+
+      <h2>2. Configure over Wi-Fi</h2>
+      <p>
+        After flashing, the board starts its own access point
+        <code>esp32-e-ink-AP</code> (password <code>remoteqth</code>). Connect to it — the
+        setup page opens automatically (captive portal). If it does not, open
+        <code>http://192.168.4.1</code>.
+      </p>
+      <p>
+        The <strong>only required field is your Wi-Fi SSID + password</strong>
+        (optionally a Device ID). Press <strong>Save</strong> and the board reboots
+        and joins your network. Full guide on
+        <a href="https://github.com/ok1hra/esp32-e-ink" target="_blank">GitHub</a>.
+      </p>
+
+      <p class="muted">
+        Flashes: bootloader, partition table, boot_app0, firmware, SPIFFS filesystem.
+        For manual flashing use <code>esp32-e-ink-20260628-full.bin</code> at offset <code>0x0</code>
+        with <code>esptool.py</code>.
+      </p>
+    </div>
+  </main>
+</body>
+</html>

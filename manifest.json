@@ -1,0 +1,17 @@
+{
+  "name": "ESP32 e-ink",
+  "version": "20260628",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        { "path": "bootloader.bin", "offset": 4096 },
+        { "path": "partitions.bin", "offset": 32768 },
+        { "path": "boot_app0.bin",  "offset": 57344 },
+        { "path": "firmware.bin",   "offset": 65536 },
+        { "path": "spiffs.bin",     "offset": 2162688 }
+      ]
+    }
+  ]
+}
