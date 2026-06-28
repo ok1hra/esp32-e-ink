@@ -36,7 +36,7 @@ BUSY 4
 Email:podpora@laskakit.cz
 Web:laskakit.cz
 
-HARDWARE ESP32 Dev Module
+HARDWARE ESP32 Dev Module - No OTA (2 MB APP/2MB SPIFFS)
 IDE 1.8.19
 Použití knihovny FS ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/FS
 Použití knihovny SD ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/SD
@@ -55,31 +55,57 @@ Použití knihovny PubSubClient ve verzi 2.8 v adresáři: /home/dan/Arduino/lib
 mosquitto_pub -h 54.38.157.134 -t OK1HRA/0/ROT/Azimuth -m '83'
 mosquitto_sub -v -h 54.38.157.134 -t 'OK1HRA/0/ROT/#'
 
+New firmware version (GitHub Pages USB web flasher)
+  1. Increase REV value below.
+  2. Arduino IDE 1.8.19: Sketch/Export compiled Binary
+     (board "ESP32 Dev Module", Partition Scheme "No OTA (2MB APP/2MB SPIFFS)")
+     -> produces esp32-e-ink.ino.esp32.bin in this sketch folder.
+  3a. Build the web flasher locally (no publish): $ ./tools/gh-pages.sh
+  3b. Build AND publish to GitHub Pages:          $ ./tools/gh-pages.sh --publish
+      (--publish wipes the gh-pages branch, so only the latest firmware stays online)
+  4. git commit with the Release number and push.
+
+Web UI only (no new firmware)
+  - edit data/*.html/css/js, then rebuild the SPIFFS image: $ ./tools/build_spiffs_image.sh
+  - flash it over USB: esptool.py --chip esp32 write_flash 0x210000 build/spiffs.bin
+
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20240328
-// #define USunits                   // enable American metrological units
-#define OTAWEB                    // enable upload firmware via web
+#define REV 20260628
+#define WIFI
 #define MQTT                      // enable MQTT
-#define DISABLE_SD                // disable SD card - configure maunaly in setup(void) part of code
+#define WDT         // watchdog timer
 // #define APRSFI                 // enable get from aprs.fi - not work
 #include <esp_adc_cal.h>
-#include <FS.h>
-#include <SD.h>
 #include <SPI.h>
+#define ENABLE_GxEPD2_GFX 1   // make GxEPD2_BW/3C derive from GxEPD2_GFX for runtime panel selection
 #include <GxEPD2_BW.h>
+#include <GxEPD2_3C.h>
+#include <GxEPD2_GFX.h>
+#include <SPIFFS.h>
+#include <Preferences.h>
+#include <DNSServer.h>
+#include <WiFiUdp.h>
+#include <TrxNet.h>      // P2P alternative to MQTT (runtime-selectable)
 // #define BMPMAP
 
-// Select Display hardware type (see on PCB)
+// Display panel type is selected at runtime (NVS "disp") and instantiated in initDisplay().
+// All settings live in NVS via Preferences; the config web UI is served from SPIFFS.
+// 0 = GDEW042T2 (UC8176)  1 = GDEY042T81 (SSD1683)  2 = GDEQ042Z21 (UC8276, 3-color)
+GxEPD2_GFX *gfx = nullptr;
+uint8_t dispType = 0;
+Preferences prefs;
+const char* NVS_NS = "eink";
+/*
+  Configuration is stored in NVS (Preferences, namespace "eink"). Keys:
+    apmode bool | ssid0..3 / pass0..3 String | devsel int | topic String
+    mqip0..3 uchar | mqport ushort | rot uchar | neg bool | offto uchar
+    units bool | tzh int (hours) | dst bool | ntp String | disp uchar
+    proto uchar (0=MQTT 1=TrxNet) | udpport ushort | devid String
+  First boot (no config) -> AP mode. WiFi-connect failure -> set apmode and reboot.
+*/
 
-// Display GDEW042T2
-GxEPD2_BW<GxEPD2_420, GxEPD2_420::HEIGHT> display(GxEPD2_420(/*CS=5*/ SS, /*DC=*/17, /*RST=*/16, /*BUSY=*/4)); // GDEW042T2 400x300, UC8176 (IL0398)
-
-// Display GDEY042T81
-//GxEPD2_BW<GxEPD2_420_GDEY042T81, GxEPD2_420_GDEY042T81::HEIGHT> display(GxEPD2_420_GDEY042T81(/*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16, /*BUSY=*/ 4)); //GDEY042T81, 400x300, SSD1683 (no inking)
-
-//GxEPD2_3C<GxEPD2_420c_Z21, GxEPD2_420c_Z21::HEIGHT> display(GxEPD2_420c_Z21(/*CS=5*/ SS, /*DC=*/ 17, /*RST=*/ 16, /*BUSY=*/ 4)); // GDEQ042Z21 400x300, UC8276
 
 #if defined(BMPMAP)
   #include "ok.h"
@@ -129,7 +155,7 @@ GxEPD2_BW<GxEPD2_420, GxEPD2_420::HEIGHT> display(GxEPD2_420(/*CS=5*/ SS, /*DC=*
   "-----END CERTIFICATE-----\n";
 #endif
 
-// source https://oleddisplay.squix.ch/ - must copy via clipboard!
+// source https://oledgfx->squix.ch/ - must copy via clipboard!
 // #include "Open_Sans_Condensed_Light_80.h"
 // #include "Open_Sans_Condensed_Bold_20.h"
 // #include "Open_Sans_Condensed_Light_16.h"
@@ -138,7 +164,7 @@ GxEPD2_BW<GxEPD2_420, GxEPD2_420::HEIGHT> display(GxEPD2_420(/*CS=5*/ SS, /*DC=*
 #include "Logisoso8pt7b.h"
 #include "Logisoso10pt7b.h"
 #include "Logisoso50pt7b.h"
-// display.setFont(&Logisoso250pt7b);
+// gfx->setFont(&Logisoso250pt7b);
 uint16_t colorB = GxEPD_BLACK;
 uint16_t colorW = GxEPD_WHITE;
 
@@ -153,29 +179,30 @@ const String mainHWdevice[4][2] = {
     {"topic", "name"},        // 3
 };
 int mainHWdeviceSelect = -1;  //0 = IP rotator, 1 = WX station, 2 = aprs.fi source
+String MQTT_TOPIC = "";        // same as 'location' on IP rotator
 String TOPIC = "";        // same as 'location' on IP rotator
 String ROT_TOPIC = "";    // mainHWdevice[mainHWdeviceSelect][0]
 String WX_TOPIC = "";    // mainHWdevice[mainHWdeviceSelect][0]
 byte mqttBroker[4]={0,0,0,0}; // MQTT broker IP address
 int MQTT_PORT = 0;         // MQTT broker port
 IPAddress mqtt_server_ip(mqttBroker[0], mqttBroker[1], mqttBroker[2], mqttBroker[3]);       // MQTT broker IP address
-String SSID = "";
+String SSID = "";   // active connection (the network we joined this boot)
 String PSWD = "";
 String APRS_FI_NAME = "";
 String APRS_FI_APIKEY = "";
+
+// up to 4 stored WiFi networks; boot scans and joins the strongest reachable known one
+String wifiSSID[4] = {"","","",""};
+String wifiPSWD[4] = {"","","",""};
+
+String topicBase = "";    // single topic base from the web UI; /ROT/ or /WX/ is appended per devsel
+bool usUnits = false;     // false = metric, true = US units (was #define USunits)
 
 unsigned int eInkRotation = 1; // 1 USB TOP, 3 USB DOWN | 0 default, 1 90°CW, 2 180°CW, 3 90°CCW
 int OfflineTimeout = 5;   // minutes
 bool eInkNegativ = false;
 bool eInkNegativTmp = false;
 int DesignSkin = 0;       // not implemented!
-// #define SDTEST_TEXT_PADDING 25
-#define SD_CS 27
-SPIClass spiSD(HSPI); // Use HSPI for SD card
-File myFile;
-String ConfigFile="/setup.cfg";
-char charConfigFile[11]; // length +1
-int microSDlines = 0;
 
 // ROT
 int Azimuth       = -42;
@@ -197,44 +224,48 @@ int WindDir = 0;
 float WindSpeedAvg = 0;
 float WindSpeedMaxPeriod = 0;
 
-const int SdCardPresentPin = 33;
-bool SdCardPresentStatus   = false;
-
 int Az=0;
 char buf[21];
 #define RAD_TO_DEG 57.295779513082320876798154814105
 
-// ntp
+// ntp (configurable via web; derived from tzHours/dst/ntp in NVS)
 #include "time.h"
-const char* ntpServer = "pool.ntp.org";
-// const char* ntpServer = "tik.cesnet.cz";
-// const char* ntpServer = "time.google.com";
-const long  gmtOffset_sec = 0;
-const int   daylightOffset_sec = 0;
-
-// 1000 seconds WDT (WatchDogTimer)
-#include <esp_task_wdt.h>
-#define WDT_TIMEOUT 1000
-long WdtTimer=0;
+String ntpServer = "pool.ntp.org";
+long  gmtOffset_sec = 0;
+int   daylightOffset_sec = 0;
 
 int DebuggingOutput = 1;  // 0-off | 1-Serial
 
-#define WIFI
-#include <WiFi.h>
-// #include <ETH.h>
-// int SsidPassSize = (sizeof(SsidPass)/sizeof(char *))/2; //array size
-// int SelectSsidPass = -1;
-#define wifi_max_try 10             // Number of try
-unsigned long WifiTimer = 0;
-unsigned long WifiReconnect = 30000;
+#if defined(WDT)
+  // 1000 seconds WDT (WatchDogTimer)
+  #include <esp_task_wdt.h>
+  #define WDT_TIMEOUT 1000
+  long WdtTimer=0;
+#endif
+
+#if defined(WIFI)
+  #include <WiFi.h>
+  // #include <ETH.h>
+  // int SsidPassSize = (sizeof(SsidPass)/sizeof(char *))/2; //array size
+  // int SelectSsidPass = -1;
+  #define wifi_max_try 20             // Number of try
+  unsigned long WifiTimer = 0;
+  unsigned long WifiReconnect = 30000;
+  String MACString;
+
+  #include <ESPmDNS.h>
+
+  const char* ssidAP     = "esp32-e-ink-AP";
+  const char* passwordAP = "remoteqth";
+  bool APmode = false;
+  #include <WebServer.h>
+  WebServer ajaxserver(80);
+  DNSServer dnsServer;            // captive portal in AP mode
+  const byte DNS_PORT = 53;
+  bool FsMounted = false;         // true after a successful SPIFFS.begin()
+#endif
 
 unsigned int RunApp = 255;
-#if defined(OTAWEB)
-  #include <AsyncTCP.h>
-  #include <ESPAsyncWebServer.h>
-  #include <AsyncElegantOTA.h>
-  AsyncWebServer OTAserver(80);
-#endif
 
 #if defined(MQTT)
   #include <PubSubClient.h>
@@ -252,214 +283,310 @@ unsigned int RunApp = 255;
   long MqttStatusTimer[2]{1500,1000};
 #endif
 
+// ---- TrxNet (runtime-selectable alternative to MQTT) ----
+// Both protocols are compiled in; only the one selected by NVS "proto" is started at boot.
+WiFiUDP  trxUdp;
+TrxNet   trxNet(trxUdp);
+int      proto      = 0;     // 0 = MQTT, 1 = TrxNet  (NVS "proto")
+uint16_t udpPort    = 5683;  // TrxNet UDP/CoAP port  (NVS "udpport")
+String   deviceId   = "";    // numeric ID only, e.g. "01"  (NVS "devid")
+String   trxSource  = "";    // peer we mirror, e.g. "WX.01" (configured, or auto-picked at runtime)
+String   trxOwnName = "";    // our own TrxNet name, e.g. "INK.01" (or INK.<MAC> when no devid)
+// --- runtime source auto-select (never persisted to NVS) ---
+String   trxCfgSource = "";  // the configured source to honour/reclaim ("" = none configured -> pure auto)
+int      trxCfgSelect = 1;   // configured device type (layout) to prefer when auto-picking
+bool     trxAutoPicked= false;// true when trxSource came from the network scan, not from config
+int      trxCurSelect = -1;  // device type currently subscribed (-1 = nothing subscribed yet)
+uint32_t trxStartMs   = 0;   // millis() at trxBegin(), for the configured-source grace window
+
+// ---- Low power (battery) mode ----------------------------------------------------------------------
+// Fixed-interval deep sleep + pull-latest-on-wake. The e-ink image is bistable so it stays visible
+// while the board sleeps. On each timer wake we reconnect (fast, from RTC-cached AP), pull the latest
+// reading (MQTT retained / TrxNet greet), refresh only if it changed, then sleep again.
+// Hardware: LaskaKit ESPink-42 v2.x -> battery divider on GPIO34, e-paper supply transistor on GPIO2.
+#define LP_BAT_PIN        34            // ADC1_CH6, safe to read with Wi-Fi on
+#define LP_DIVIDER_RATIO  1.7693877551f // 1 MOhm + 1.3 MOhm divider (LaskaKit ESPink42_V2)
+#define LP_POWER_PIN      2             // e-paper supply transistor (HIGH = panel on)
+#define LP_GRACE_MS       90000UL       // cold-boot window kept awake for web config
+#define LP_WAKE_BUDGET_MS 15000UL       // max awake time on a timer wake before giving up
+#define LP_BAT_WARN       3.50f         // below -> show "recharge" marker, keep running
+#define LP_BAT_CRIT       3.30f         // below -> park (final screen + long sleep) to protect the cell
+#define LP_BAT_RESUME     3.45f         // hysteresis: leave park only above this
+#define LP_I_ACTIVE_MA    90.0f         // assumed average current while awake (Wi-Fi on), for runtime estimate
+#define LP_I_SLEEP_MA     0.05f         // assumed deep-sleep current (e-paper supply off)
+bool     lowPower    = false;  // NVS "lowpwr"
+uint16_t lpInterval  = 15;     // wake interval in minutes (NVS "lpint")
+uint16_t batCapacity = 0;      // battery capacity in mAh for the runtime estimate (NVS "batcap", 0 = off)
+bool     timerWake   = false;  // this boot was an interval wake (vs cold boot / RESET)
+bool     lpDataHandled = false;// fresh reading received and shown (or suppressed) this wake
+float    lpVbat      = 0.0f;   // last battery reading (volts)
+
+// Persisted across deep sleep (RTC slow memory survives the reboot a timer wake performs)
+RTC_DATA_ATTR uint32_t rtcBootCount   = 0;
+RTC_DATA_ATTR uint8_t  rtcBssid[6]    = {0};
+RTC_DATA_ATTR uint8_t  rtcChannel     = 0;
+RTC_DATA_ATTR int      rtcSlot        = -1;    // wifi slot of the cached AP
+RTC_DATA_ATTR bool     rtcBssidValid  = false;
+RTC_DATA_ATTR uint32_t rtcShownHash   = 0;     // hash of the values last drawn (refresh suppression)
+RTC_DATA_ATTR bool     rtcParked      = false; // critical-battery park latched
+RTC_DATA_ATTR uint32_t rtcAwakeAvgMs  = 0;     // EMA of the measured awake-window length on timer wakes
+
+#include "esp_sleep.h"
+#include "driver/gpio.h"
+
+//-------------------------------------------------------------------------------------------------------
+// Forward declarations (Arduino auto-prototype generation fails for this sketch)
+void print_wifi_error();
+void MqttRx(char *topic, byte *payload, unsigned int length);
+bool mqttReconnect();
+String UtcTime(int format);
+void Watchdog();
+void Mqtt();
+void eInkRefresh();
+int AzimuthShifted(int DEG);
+void DirectionalRosette(int deg, int X, int Y, int R);
+void Triangle(float VALUE, float MIN, float MAX);
+void Arrow(int deg, int X, int Y, int r);
+float Xcoordinate(int dir, int Center, int r);
+float Ycoordinate(int dir, int Center, int r);
+void MqttPubString(String TOPICEND, String DATA, bool RETAIN);
+void loadConfig();
+void applyDerivedConfig();
+void initDisplay();
+bool connectWifi();
+void startAPmode();
+void handleApiConfig();
+void handleApiConfigSave();
+void handleFactoryReset();
+void handleRoot();
+void handleStatic();
+bool streamSpiffsFile(const String& path);
+String webContentType(const String& path);
+String jsonEsc(const String& s);
+void trxBegin();
+void TrxLoop();
+void recomputeDewPoint();
+void handleApiPeers();
+void onTrxPeer(const TrxPeer* p);
+void trxSubscribeFor(int type);
+void trxMaintainSource();
+void drawTrxWaiting();
+float lpBatteryVolts();
+void lpInit();
+void lpDrawRecharge(float vb);
+void lpEnterDeepSleep();
+void lowPowerManage();
+void lpDrawBattery();
+uint32_t lpWxHash();
+float lpEstimateDays();
+
 //-------------------------------------------------------------------------------------------------------
 void setup(void){
-  #if defined(DISABLE_SD)
-  //----------- manual config -----------
-    mainHWdeviceSelect=1;   // 0 = IP rotator, 1 = WX station, 2 = aprs.fi (get every 15 minutes) - not works!
-    SSID="SSID";                 // (all) Wifi SSID (max 20 characters)
-    PSWD="PASSWORD";       // (all) Wifi password (max 20 characters)
-    eInkRotation=1;         // (all) 1 = USB on top, 3 = USB downside (0 default, 1 90°CW, 2 180°CW, 3 90°CCW)
-    ROT_TOPIC="OK1HRA/0";   // (0) part of MQTT topic CALLSIGN/NR. Must be same as on IP rotator.
-    WX_TOPIC="OK1HRA-7";    // (1) part of MQTT topic CALLSIGN. Must be same as on WX station.
-    mqttBroker[0]=54;         // (0/1) MQTT broker IP for IP rotator and WX station
-    mqttBroker[1]=38;         // (0/1) Must be same as on main device.
-    mqttBroker[2]=157;        // (0/1)
-    mqttBroker[3]=134;        // (0/1) default 54.38.157.134 (remoteqth.com)
-    MQTT_PORT=1883;         // (0/1) MQTT broker port. Must be same as on main device.
-    OfflineTimeout=6;       // (0/1) minutes
-    eInkNegativ=1;          // (all) 1 = Dark mode (default), 0 = Light mode
-    DesignSkin=0;           // not implemented!
-    APRS_FI_NAME="OK1HRA-7";// (2) your CALLSIGN on aprs.fi - not works!
-    APRS_FI_APIKEY="key";   // (2) API key get from https://aprs.fi/account/ - not works!
-  //----------- manual config end -----------
-
-    mqtt_server_ip = mqttBroker;
-    display.setRotation(eInkRotation); // 1 USB TOP, 3 USB DOWN | 0 default, 1 90°CW, 2 180°CW, 3 90°CCW
-    if(eInkNegativ==true){
-      colorB = GxEPD_BLACK;
-      colorW = GxEPD_WHITE;
-      eInkNegativTmp=true;
-    }else{
-      colorB = GxEPD_WHITE;
-      colorW = GxEPD_BLACK;
-      eInkNegativTmp=false;
-    }
-    ROT_TOPIC = String(ROT_TOPIC)+String(mainHWdevice[0][0]);
-    WX_TOPIC = String(WX_TOPIC)+String(mainHWdevice[1][0]);
-    if(mainHWdeviceSelect==0){
-      TOPIC = ROT_TOPIC;
-    }else if(mainHWdeviceSelect==1){
-      TOPIC = WX_TOPIC;
-    }
-  #endif
-
-  pinMode(SdCardPresentPin, INPUT);
-  pinMode(2, OUTPUT);    // Set epaper transistor as output
-  digitalWrite(2, HIGH); // Surn on epaper transistor
-  delay(100);            // Delay so it has time to turn on
-  display.init();
-  display.setRotation(eInkRotation); // 1 USB TOP, 3 USB DOWN | 0 default, 1 90°CW, 2 180°CW, 3 90°CCW
 
   Serial.begin(115200);
   Serial.println();
-  Serial.print("e-ink rev ");
+  Serial.println("-------- DivaDroid International --------");
+  Serial.print(" ink| rev ");
   Serial.println(REV);
+  Serial.println(" ink| press '?' for network status");
 
-  #if !defined(DISABLE_SD)
-    SdCardPresentStatus=!digitalRead(SdCardPresentPin);
-    Serial.println("Check microSD ");
+  loadConfig();          // read all settings from NVS into globals (sets APmode on first boot)
 
-    if(SdCardPresentStatus != true) {
-      Serial.print("micro SD card is not inserted");
-      display.fillScreen(colorW);
-      display.setTextColor(colorB);
-      display.setFont(&Logisoso10pt7b);
-      display.setCursor(30, 120);
-      display.println("!");
-      display.setCursor(30, 160);
-      display.println("micro SD card is not inserted");
-      display.setCursor(30, 190);
-      display.println("Please insert card with");
-      display.setCursor(30, 220);
-      display.println("setup.cfg config file");
-      display.display(false);
-      while(SdCardPresentStatus != true) {
-        delay(1000);
-        SdCardPresentStatus=!digitalRead(SdCardPresentPin);
-      }
-    }
-    SDtest();
+  // Power up the e-paper supply (GPIO2 transistor) BEFORE initialising the panel. In low-power mode
+  // the supply is parked LOW during deep sleep (the e-ink image is bistable, so it stays visible with
+  // no power) - release that hold first or GPIO2 would stay LOW and the panel init would talk to a
+  // dead bus.
+  gpio_hold_dis((gpio_num_t)LP_POWER_PIN);
+  gpio_deep_sleep_hold_dis();
+  pinMode(2, OUTPUT);    // Set epaper transistor as output
+  digitalWrite(2, HIGH); // Turn on epaper transistor
+  delay(100);            // Delay so it has time to turn on
 
-    display.fillScreen(colorB);
-    display.setTextColor(colorW);
-    display.setFont(&Logisoso10pt7b);
-    display.setCursor(70, 150);
-    display.println("Connecting");
-    display.setFont(&Logisoso8pt7b);
-    display.setCursor(90, 190);
-    display.println("MicroSD import "+String(microSDlines)+" values");
-      display.fillCircle(80, 190-7, 3, colorW);
-    display.setCursor(90, 220);
-    display.println("WiFi "+String(SSID)+"...");
-      display.fillCircle(80, 220-7, 3, colorW);
-    display.setFont(&Logisoso8pt7b);
-    display.setCursor(200, 385);
-    display.print(REV);
-    display.display(false);
-  #endif
+  initDisplay();         // instantiate gfx for the selected panel (NVS "disp")
+  gfx->init();
+  gfx->setRotation(eInkRotation); // 1 USB TOP, 3 USB DOWN | 0 default, 1 90°CW, 2 180°CW, 3 90°CCW
+  Serial.println(" LCD| init rotation "+String(eInkRotation));
 
-  // display.fillScreen(colorB);
+  applyDerivedConfig();   // colors from eInkNegativ, ROT/WX/TOPIC from topicBase, tz from tzHours/dst
+
+  lpInit();   // low-power: classify wake cause, release sleep GPIO hold, battery protection (may sleep)
+
+  // mount SPIFFS (web UI assets). Keep an existing good FS; format empty if the partition is fresh.
+  FsMounted = SPIFFS.begin(false);
+  if(!FsMounted){
+    Serial.println("FS | SPIFFS mount failed - formatting to partition geometry");
+    FsMounted = SPIFFS.begin(true);
+  }
+  if(FsMounted){
+    Serial.print("FS | SPIFFS used "); Serial.print(SPIFFS.usedBytes());
+    Serial.print("/"); Serial.print(SPIFFS.totalBytes()); Serial.println(" B");
+  }else{
+    Serial.println("FS | SPIFFS unavailable - flash spiffs.bin over USB");
+  }
+
+  // web routes - served in both AP and STA mode (server started after WiFi is up, below)
+  ajaxserver.on("/", handleRoot);
+  ajaxserver.on("/setup", handleRoot);
+  ajaxserver.on("/api/config", HTTP_GET, handleApiConfig);
+  ajaxserver.on("/api/config", HTTP_POST, handleApiConfigSave);
+  ajaxserver.on("/api/peers", HTTP_GET, handleApiPeers);
+  ajaxserver.on("/factoryreset", HTTP_POST, handleFactoryReset);
+  ajaxserver.onNotFound(handleStatic);   // static SPIFFS files (gzip-aware) + captive-portal catch-all
 
   #if defined(WIFI)
-    // WiFi.disconnect(true);
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(SSID.c_str(), PSWD.c_str());
-    Serial.print("Connecting ssid "+String(SSID)+" ");
-    int count_try = 0;
-    while(WiFi.status() != WL_CONNECTED) {
-      delay(500);
-      Serial.print(".");
-      count_try++;    // Increase try counter
-      if ( count_try >= wifi_max_try ) {
-        Serial.println("\n");
-        Serial.println("Impossible to establish WiFi connexion");
-
-        print_wifi_error();
+    if(APmode==true){
+      startAPmode();
+    }else{
+      if(!connectWifi()){
+        // low-power timer wake: never fall back to AP mode (it would drain the battery). One short
+        // retry, then sleep and try again next interval - the e-ink keeps its retained image.
+        if(lowPower && timerWake){
+          Serial.println("WIFI| timer wake connect failed - short retry then sleep");
+          delay(1000);
+          if(!connectWifi()) lpEnterDeepSleep();   // never returns
+        }else{
+          prefs.begin(NVS_NS, false);
+          prefs.putBool("apmode", true);   // no known network reachable -> reconfigure in AP mode
+          prefs.end();
+          Serial.println("WIFI| no known AP reachable - rebooting to AP mode...");
+          delay(3000);
+          ESP.restart();
+        }
+      }
+      MACString = WiFi.macAddress();
+      if (!MDNS.begin("esp32eink")) {
+        Serial.println("mDNS| responder failed");
+      }else{
+        MDNS.addService("http", "tcp", 80);
+        Serial.println("mDNS| responder started");
       }
     }
+    ajaxserver.begin();
+    Serial.println("HTTP| web server started");
+  #endif
+
+
+  if(APmode==false){
+
+    #if defined(HTTP)
+      server = WiFiServer(HTTP_CAT_PORT);
+      server.begin();
+
+      // Add service to MDNS-SD
+      MDNS.addService("http", "tcp", 81);
+      MDNS.addService("http", "tcp", 80);
+    #endif
+
+    #if defined(MQTT)
+      // if(mqttEnable==true){
+        if (MQTT_LOGIN == true){
+        // if (mqttClient.connect("esp32gwClient", MQTT_USER, MQTT_PASS)){
+          //   AfterMQTTconnect();
+          // }
+        }else if(proto==0 && (mainHWdeviceSelect==0 || mainHWdeviceSelect==1)){
+            mqtt_server_ip = IPAddress(mqttBroker[0], mqttBroker[1], mqttBroker[2], mqttBroker[3]);       // MQTT broker IP address (set global)
+            mqttClient.setServer(mqtt_server_ip, MQTT_PORT);
+            Serial.print("MQTT| Connect to ");
+            Serial.print(mqtt_server_ip);
+            Serial.print(":");
+            Serial.println(MQTT_PORT);
+            mqttClient.setCallback(MqttRx);
+            Serial.println("MQTT| Callback");
+            lastMqttReconnectAttempt = 0;
+
+            char charbuf[50];
+            WiFi.macAddress().toCharArray(charbuf, 18);
+              Serial.print("MQTT| maccharbuf ");
+              Serial.println(charbuf);
+              mqttReconnect();
+        }
+      // }
+    #endif
+    if(proto==1){ trxBegin(); if(!(lowPower && timerWake)) drawTrxWaiting(); }   // start TrxNet; skip splash on a low-power timer wake (keep retained image)
+    Serial.println("AP-MODE OFF");
     Serial.println("");
     Serial.print("WIFI connected with IP ");
     Serial.println(WiFi.localIP());
     Serial.print("WIFI dBm: ");
     Serial.println(WiFi.RSSI());
 
-    if(mainHWdeviceSelect==2){
-      display.fillScreen(colorB);
-      display.setTextColor(colorW);
-      display.setFont(&Logisoso10pt7b);
-      display.setCursor(70, 150);
-      display.println("Connecting");
-      display.setFont(&Logisoso8pt7b);
-      display.setCursor(90, 190);
-      display.println("MicroSD import "+String(microSDlines)+" values");
-      display.fillCircle(80, 190-7, 3, colorW);
-      display.setCursor(90, 220);
-      display.println("WiFi "+String(SSID)+" "+String(WiFi.RSSI())+" dBm");
-      display.fillCircle(80, 220-7, 3, colorW);
-      display.setCursor(90, 250);
-      display.println(WiFi.localIP());
-      display.fillCircle(80, 250-7, 3, colorW);
-      display.setCursor(90, 280);
-      display.fillCircle(80, 280-7, 3, colorW);
-      display.println(String(mainHWdevice[mainHWdeviceSelect][1])+"/"+String(APRS_FI_NAME)+"...");
-      display.setFont(&Logisoso8pt7b);
-      display.setCursor(15, 385);
-      UtcTime(1).toCharArray(buf, 21);
-      display.println("UTC "+String(buf));
-      display.setCursor(200, 385);
-      display.print(REV);
-      display.display(false);
-    }
+  }
 
-    #if defined(MQTT)
-    if(mainHWdeviceSelect==0 || mainHWdeviceSelect==1){
-      if (MQTT_LOGIN == true){
-        // if (mqttClient.connect("esp32gwClient", MQTT_USER, MQTT_PASS)){
-          //   AfterMQTTconnect();
-          // }
-        }else{
-          if(mainHWdeviceSelect==0 || mainHWdeviceSelect==1 ){
-            mqttClient.setServer(mqtt_server_ip, MQTT_PORT);
-            Serial.println("EthEvent-MQTTclient");
-            mqttClient.setCallback(MqttRx);
-            Serial.println("EthEvent-MQTTcallback");
-            lastMqttReconnectAttempt = 0;
 
-            char charbuf[50];
-            WiFi.macAddress().toCharArray(charbuf, 18);
-            if (mqttClient.connect(charbuf)){
-              Serial.print("EthEvent-maccharbuf ");
-              Serial.println(charbuf);
-              mqttReconnect();
-            }
-          }
-        }
-    }
-    #endif
 
-  #endif
+  
 
-  #if defined(OTAWEB)
-    OTAserver.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-        request->send(200, "text/plain", "e-ink rev "+String(REV)+" | PSE QSY to /update");
-    });
-    AsyncElegantOTA.begin(&OTAserver);    // Start ElegantOTA
-    OTAserver.begin();
-    Serial.println("OTAserver start");
-  #endif
   //init and get the time
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer.c_str());
   #if defined(APRSFI)
     jsonString.reserve(900);
   #endif
 
-  // WDT
-  esp_task_wdt_init(WDT_TIMEOUT, true); //enable panic so ESP32 restarts
-  esp_task_wdt_add(NULL); //add current thread to WDT watch
-  WdtTimer=millis();
-
+  #if defined(WDT)
+    // WDT
+    esp_task_wdt_init(WDT_TIMEOUT, true); //enable panic so ESP32 restarts
+    esp_task_wdt_add(NULL); //add current thread to WDT watch
+    WdtTimer=millis();
+  #endif
 }
 
 //-------------------------------------------------------------------------------------------------------
-void loop(void) {
-  Watchdog();
-  Mqtt();
-  eInkRefresh();
+// Serial console: press '?' (or 'i') to print the current network status.
+void serialMenu(){
+  while(Serial.available()){
+    char c = Serial.read();
+    if(c=='?' || c=='i' || c=='I'){
+      Serial.println();
+      Serial.println("--------------- e-ink status ---------------");
+      Serial.println(" FW REV  : "+String(REV));
+      Serial.println(" MAC     : "+MACString);
+      if(APmode){
+        Serial.println(" mode    : AP (setup)");
+        Serial.println(" AP SSID : "+String(ssidAP));
+        Serial.println(" IP      : "+WiFi.softAPIP().toString());
+        Serial.println(" URL     : http://esp32eink.local  or  http://"+WiFi.softAPIP().toString());
+      }else{
+        Serial.println(" mode    : client (STA)");
+        Serial.println(" SSID    : "+SSID+"  ("+String(WiFi.RSSI())+" dBm)");
+        Serial.println(" IP      : "+WiFi.localIP().toString());
+        Serial.println(" URL     : http://esp32eink.local  or  http://"+WiFi.localIP().toString());
+        if(proto==1){
+          Serial.println(" TrxNet  : "+trxOwnName+" :"+String(udpPort)+"  peers "+String(trxNet.peerCount()));
+          Serial.println(" source  : "+trxSource);
+        }else{
+          #if defined(MQTT)
+            Serial.println(" MQTT    : "+mqtt_server_ip.toString()+":"+String(MQTT_PORT)+"  "+(mqttClient.connected()?"connected":"down"));
+            Serial.println(" topic   : "+TOPIC);
+          #endif
+        }
+      }
+      Serial.println("--------------------------------------------");
+    }
+  }
+}
 
-  #if defined(OTAWEB)
-   AsyncElegantOTA.loop();
-  #endif
+void loop(void) {
+  serialMenu();
+
+  if(APmode==true){
+    dnsServer.processNextRequest();   // captive portal
+    ajaxserver.handleClient();
+    // eInkRefresh();
+    #if defined(WDT)
+      if(millis()-WdtTimer > 60000){
+        esp_task_wdt_reset();
+        WdtTimer=millis();
+      }
+    #endif
+
+  }else{
+    Watchdog();
+    Mqtt();
+    TrxLoop();
+    eInkRefresh();
+    ajaxserver.handleClient();
+    lowPowerManage();   // low-power: end the awake window and deep sleep when done
+  }
 }
 //-------------------------------------------------------------------------------------------------------
 
@@ -513,19 +640,20 @@ void GetHttps(){
 void eInkRefresh(){
   static long eInkRefreshTimer = -5000;
   // ROT
-  if( mainHWdeviceSelect==0 && eInkNeedRefresh==true && millis()-eInkRefreshTimer > 5000 && Azimuth!=-42 && Name != "" ){
-      display.fillScreen(colorB);
+  bool lpWake = (lowPower && timerWake);   // low-power timer wake: refresh immediately, no throttle wait
+  if( mainHWdeviceSelect==0 && eInkNeedRefresh==true && (millis()-eInkRefreshTimer > 5000 || lpWake) && Azimuth!=-42 && Name != "" ){
+      gfx->fillScreen(colorB);
 
       #if defined(BMPMAP)
-        display.drawBitmap(0, 0, ok, 300, 300, colorW);
+        gfx->drawBitmap(0, 0, ok, 300, 300, colorW);
       #endif
 
       if(Azimuth>=0){
         DirectionalRosette(AzimuthShifted(Azimuth), 150, 145, 130);
       }
 
-      display.setTextColor(colorW);
-      display.setFont(&Logisoso50pt7b);
+      gfx->setTextColor(colorW);
+      gfx->setFont(&Logisoso50pt7b);
       /*
       char to - (minus) width 39px
       char width 33px
@@ -534,150 +662,147 @@ void eInkRefresh(){
       */
       if(Azimuth>=0){
         if(AzimuthShifted(Azimuth)>=100){
-          display.setCursor(175-44, 360);
+          gfx->setCursor(175-44, 360);
         }else if(AzimuthShifted(Azimuth)<100 && AzimuthShifted(Azimuth)>=10){
-          display.setCursor(175, 360);
+          gfx->setCursor(175, 360);
         }else if(AzimuthShifted(Azimuth)<10){
-          display.setCursor(175+44, 360);
+          gfx->setCursor(175+44, 360);
         }
-        display.println(AzimuthShifted(Azimuth));
-        // display.setCursor(270, 310);
-        // display.setFont(&Logisoso10pt7b);
-        // display.println("o");
-        display.fillCircle(275, 300, 6, colorW);
+        gfx->println(AzimuthShifted(Azimuth));
+        // gfx->setCursor(270, 310);
+        // gfx->setFont(&Logisoso10pt7b);
+        // gfx->println("o");
+        gfx->fillCircle(275, 300, 6, colorW);
       }else{
-        display.setCursor(170, 355);
-        display.println("n/a");
+        gfx->setCursor(170, 355);
+        gfx->println("n/a");
       }
       int ZZshift=2;
-      display.setFont(&Logisoso8pt7b);
-      display.setCursor(15, 285+4*ZZshift);
-      display.println(String(SSID)+" "+String(WiFi.RSSI())+" dBm");
-      display.setCursor(15, 310+3*ZZshift);
-      display.print(WiFi.localIP());
-      display.setFont(&Logisoso10pt7b);
-      display.setCursor(15, 335+2*ZZshift);
-      display.println(Name);
-      display.setFont(&Logisoso8pt7b);
-      display.setCursor(15, 360+ZZshift);
-      display.println(String(TOPIC)+"#");
-      display.setCursor(15, 385);
+      gfx->setFont(&Logisoso8pt7b);
+      gfx->setCursor(15, 285+4*ZZshift);
+      gfx->println(String(SSID)+" "+String(WiFi.RSSI())+" dBm");
+      gfx->setCursor(15, 310+3*ZZshift);
+      gfx->print(WiFi.localIP());
+      gfx->setFont(&Logisoso10pt7b);
+      gfx->setCursor(15, 335+2*ZZshift);
+      gfx->println(Name);
+      gfx->setFont(&Logisoso8pt7b);
+      gfx->setCursor(15, 360+ZZshift);
+      gfx->println(String(TOPIC)+"#");
+      gfx->setCursor(15, 385);
       UtcTime(1).toCharArray(buf, 21);
-      display.println("UTC "+String(buf));
+      gfx->println("UTC "+String(buf));
       if(eInkOfflineDetect==true){
-        display.setCursor(185, 385);
-        display.setFont(&Logisoso10pt7b);
-        display.print("OFF >"+String(OfflineTimeout)+"min");
+        gfx->setCursor(185, 385);
+        gfx->setFont(&Logisoso10pt7b);
+        gfx->print("OFF >"+String(OfflineTimeout)+"min");
       }else{
-        display.setCursor(200, 385);
-        display.print(REV);
+        gfx->setCursor(200, 385);
+        gfx->print(REV);
       }
-      display.display(false);
+      lpDrawBattery();
+      gfx->display(false);
       eInkNeedRefresh=false;
       eInkRefreshTimer=millis();
+      lpDataHandled=true;
     // WX
-    }else if( (mainHWdeviceSelect==1 || mainHWdeviceSelect==2) && eInkNeedRefresh==true && millis()-eInkRefreshTimer > 10000 ){
+    }else if( (mainHWdeviceSelect==1 || mainHWdeviceSelect==2) && eInkNeedRefresh==true && (millis()-eInkRefreshTimer > 10000 || lpWake) ){
+      // Low-power: skip the slow panel refresh when nothing visible changed since the last drawn frame.
+      if(lpWake && lpWxHash() == rtcShownHash){
+        Serial.println("LP | WX unchanged - skip refresh");
+        eInkNeedRefresh=false; eInkRefreshTimer=millis(); lpDataHandled=true;
+        return;
+      }
       // Serial.println("eInk eInkNegativ "+String(eInkNegativ));
       // Serial.println("eInk colorB "+String(colorB));
       // Serial.println("eInk colorW "+String(colorW));
-        display.fillScreen(colorB);
+        gfx->fillScreen(colorB);
 
-        #if defined(USunits)
-          Temperature = (Temperature*1.8)+32;
-          DewPoint = (DewPoint*1.8)+32;
-          RainToday = RainToday/25.4;
-          WindSpeedMaxPeriod = WindSpeedMaxPeriod*3.281;
-        #endif
+        // local display copies so unit conversion never mutates the source globals (would compound on each refresh)
+        float dispTemperature = Temperature;
+        float dispDewPoint = DewPoint;
+        float dispRainToday = RainToday;
+        float dispWindSpeedMaxPeriod = WindSpeedMaxPeriod;
+        if(usUnits){
+          dispTemperature = (Temperature*1.8)+32;
+          dispDewPoint = (DewPoint*1.8)+32;
+          dispRainToday = RainToday/25.4;
+          dispWindSpeedMaxPeriod = WindSpeedMaxPeriod*3.281;
+        }
 
-        display.setTextColor(colorW);
-        display.setFont(&Logisoso50pt7b);
+        gfx->setTextColor(colorW);
+        gfx->setFont(&Logisoso50pt7b);
         int Xshift=0;
-        if(Temperature<0){
+        if(dispTemperature<0){
           Xshift=-39;
         }else{
           Xshift=0;
         }
-        if(abs(Temperature)>=10){
-          display.setCursor(64+Xshift, 85);
-        }else if(abs(Temperature)<10){
-          display.setCursor(97+Xshift, 85);
+        if(abs(dispTemperature)>=10){
+          gfx->setCursor(64+Xshift, 85);
+        }else if(abs(dispTemperature)<10){
+          gfx->setCursor(97+Xshift, 85);
         }
-        String str = String(Temperature);
+        String str = String(dispTemperature);
         String subStr = str.substring(0, str.length() - 1);
-        display.println(String(subStr));
-        display.setCursor(242, 85);
-        #if defined(USunits)
-          display.println("F");
-        #else
-          display.println("C");
-        #endif
-        display.fillCircle(230, 25, 6, colorW);
+        gfx->println(String(subStr));
+        gfx->setCursor(242, 85);
+        gfx->println(usUnits ? "F" : "C");
+        gfx->fillCircle(230, 25, 6, colorW);
 
-        display.drawLine(15, 100, 285, 100, 2);
+        gfx->drawLine(15, 100, 285, 100, 2);
         float XX = (285.0-15.0)/100.0*HumidityRel+15.0;
-        display.fillCircle((int)XX, 100, 3, colorW);
+        gfx->fillCircle((int)XX, 100, 3, colorW);
 
-        display.setFont(&Logisoso8pt7b);
-        display.setCursor(15, 125);
-        display.print("Relative humidity ");
-        display.setFont(&Logisoso10pt7b);
-        display.print(String((int)HumidityRel)+"%  ");
-        display.setFont(&Logisoso8pt7b);
-        display.print("Dew point ");
-        display.setFont(&Logisoso10pt7b);
-        display.print(String((int)DewPoint)+" ");
-        #if defined(USunits)
-          display.println("F");
-        #else
-          display.println("C");
-        #endif
+        gfx->setFont(&Logisoso8pt7b);
+        gfx->setCursor(15, 125);
+        gfx->print("Relative humidity ");
+        gfx->setFont(&Logisoso10pt7b);
+        gfx->print(String((int)HumidityRel)+"%  ");
+        gfx->setFont(&Logisoso8pt7b);
+        gfx->print("Dew point ");
+        gfx->setFont(&Logisoso10pt7b);
+        gfx->print(String((int)dispDewPoint)+" ");
+        gfx->println(usUnits ? "F" : "C");
 
-        display.setCursor(15, 150);
-        display.setFont(&Logisoso8pt7b);
-        display.print("Pressure ");
-        display.setFont(&Logisoso10pt7b);
-        display.print(String((int)Pressure)+" hpa");
+        gfx->setCursor(15, 150);
+        gfx->setFont(&Logisoso8pt7b);
+        gfx->print("Pressure ");
+        gfx->setFont(&Logisoso10pt7b);
+        gfx->print(String((int)Pressure)+" hpa");
         Triangle(Pressure, 983.0, 1043.0);  // 1013 +-30
-        display.drawLine(15, 200, 20, 200, 2);
+        gfx->drawLine(15, 200, 20, 200, 2);
 
-        if(RainToday>0){
-          str = String(RainToday);
+        if(dispRainToday>0){
+          str = String(dispRainToday);
           subStr = str.substring(0, str.length() - 1);
-          display.print("  RAIN "+String(subStr)+" ");
-          #if defined(USunits)
-            display.println("in");
-          #else
-            display.println("mm");
-          #endif
-          int ten = (int)RainToday % 10;
-          if(RainToday>0 && RainToday<1){
-            display.fillCircle(285-1*(11+1), 170, 3+1, colorW);
+          gfx->print("  RAIN "+String(subStr)+" ");
+          gfx->println(usUnits ? "in" : "mm");
+          int ten = (int)dispRainToday % 10;
+          if(dispRainToday>0 && dispRainToday<1){
+            gfx->fillCircle(285-1*(11+1), 170, 3+1, colorW);
           }
           for (int j=ten; j>0; j--) {
-            display.fillCircle(285-j*(11+j), 170, 3+j, colorW);
+            gfx->fillCircle(285-j*(11+j), 170, 3+j, colorW);
           }
-          int tens = (int)(RainToday/10);
+          int tens = (int)(dispRainToday/10);
           for (int j=tens; j>0; j--) {
-            display.fillCircle(j*30-5, 170, 13, colorW);
+            gfx->fillCircle(j*30-5, 170, 13, colorW);
           }
         }
 
-        display.setFont(&Logisoso50pt7b);
-        if(abs(WindSpeedMaxPeriod)>=10){
-          display.setCursor(6+4, 265);
-        }else if(abs(WindSpeedMaxPeriod)<10){
-          display.setCursor(50+4, 265);
+        gfx->setFont(&Logisoso50pt7b);
+        if(abs(dispWindSpeedMaxPeriod)>=10){
+          gfx->setCursor(6+4, 265);
+        }else if(abs(dispWindSpeedMaxPeriod)<10){
+          gfx->setCursor(50+4, 265);
         }
-        if(WindSpeedMaxPeriod>0){
-          display.println((int)WindSpeedMaxPeriod);
-          // display.setFont(&Logisoso10pt7b);
-          display.setFont(&Logisoso8pt7b);
-          display.setCursor(35, 290);
-          #if defined(USunits)
-            display.println("gust ft/s");
-          #else
-            display.println("gust m/s");
-          #endif
+        if(dispWindSpeedMaxPeriod>0){
+          gfx->println((int)dispWindSpeedMaxPeriod);
+          // gfx->setFont(&Logisoso10pt7b);
+          gfx->setFont(&Logisoso8pt7b);
+          gfx->setCursor(35, 290);
+          gfx->println(usUnits ? "gust ft/s" : "gust m/s");
 
         }
 
@@ -687,51 +812,52 @@ void eInkRefresh(){
         DirectionalRosette(WindDir, 200, 270, 80);
 
         int ZZshift=2;
-        // display.setFont(&Logisoso10pt7b);
-        // display.println(Name);
-        display.setFont(&Logisoso8pt7b);
-        display.setCursor(15, 285+4*ZZshift);
-        display.setCursor(15, 310+3*ZZshift);
-        display.println(String(SSID)+" "+String(WiFi.RSSI())+" dBm");
-        display.setCursor(15, 335+2*ZZshift);
-        display.print(WiFi.localIP());
-        display.setFont(&Logisoso8pt7b);
-        display.setCursor(15, 360+ZZshift);
+        // gfx->setFont(&Logisoso10pt7b);
+        // gfx->println(Name);
+        gfx->setFont(&Logisoso8pt7b);
+        gfx->setCursor(15, 285+4*ZZshift);
+        gfx->setCursor(15, 310+3*ZZshift);
+        gfx->println(String(SSID)+" "+String(WiFi.RSSI())+" dBm");
+        gfx->setCursor(15, 335+2*ZZshift);
+        gfx->print(WiFi.localIP());
+        gfx->setFont(&Logisoso8pt7b);
+        gfx->setCursor(15, 360+ZZshift);
         if(mainHWdeviceSelect==1){
-          display.println(String(TOPIC)+"#");
+          gfx->println(String(TOPIC)+"#");
         }else if(mainHWdeviceSelect==2){
-          display.println(String(mainHWdevice[mainHWdeviceSelect][1])+"/"+String(APRS_FI_NAME));
+          gfx->println(String(mainHWdevice[mainHWdeviceSelect][1])+"/"+String(APRS_FI_NAME));
         }
-        display.setCursor(15, 385);
+        gfx->setCursor(15, 385);
         UtcTime(1).toCharArray(buf, 21);
-        display.println("UTC "+String(buf));
+        gfx->println("UTC "+String(buf));
         if(eInkOfflineDetect==true){
-          display.setCursor(185, 385);
-          display.setFont(&Logisoso10pt7b);
-          display.print("OFF >"+String(OfflineTimeout)+"min");
+          gfx->setCursor(185, 385);
+          gfx->setFont(&Logisoso10pt7b);
+          gfx->print("OFF >"+String(OfflineTimeout)+"min");
         }else{
-          display.setCursor(200, 385);
-          display.print(REV);
+          gfx->setCursor(200, 385);
+          gfx->print(REV);
         }
 
-        display.display(false);
+        lpDrawBattery();
+        gfx->display(false);
         eInkNeedRefresh=false;
         eInkRefreshTimer=millis();
+        lpDataHandled=true;
+        if(lowPower) rtcShownHash = lpWxHash();   // seed/refresh suppression baseline (incl. cold boot)
   }
 }
 //------------------------------------------------------------------------------
 void Triangle(float VALUE, float MIN, float MAX){
   float YY = 400.0-(VALUE - MIN) * (400.0/(MAX-MIN));
-  display.fillTriangle(0, (int)YY-5, 14, (int)YY, 0, (int)YY+5, colorW);
+  gfx->fillTriangle(0, (int)YY-5, 14, (int)YY, 0, (int)YY+5, colorW);
   // Serial.println("Triangle Ypx: "+String(YY));
 }
 
 //------------------------------------------------------------------------------
 int AzimuthShifted(int DEG){
   DEG=DEG+AzimuthStart; // 246 + 390 > 236
-  if(DEG>359){
-    DEG=DEG-360;
-  }
+  DEG=((DEG % 360) + 360) % 360; // normalize to 0..359 for any input
   return DEG;
 }
 
@@ -845,18 +971,10 @@ void Watchdog(){
     }
   #endif
 
-  static unsigned long SdCardTimer = millis();
-  if(millis()-SdCardTimer > 1000){
-    SdCardPresentStatus=!digitalRead(SdCardPresentPin);
-    // Serial.println(" microSD "+String(SdCardPresentStatus));
-    SdCardTimer = millis();
-  }
-
   static bool eInkOfflineDetectTmp = false;
   if( (millis()-RxMqttTimer) > OfflineTimeout*60000 && eInkOfflineDetect == false ){
     eInkNeedRefresh=true;
     eInkOfflineDetect = true;
-    eInkOfflineDetectTmp = eInkOfflineDetect;
     Serial.print(millis());
     Serial.print(" | ");
     Serial.print(OfflineTimeout);
@@ -886,15 +1004,35 @@ void Watchdog(){
     }
   // }
 
+  // #if defined(WIFI)
+  //   unsigned long currentMillis = millis();
+  //   // if WiFi is down, try reconnecting every CHECK_WIFI_TIME seconds
+  //   if ((WiFi.status() != WL_CONNECTED) && (currentMillis - WifiTimer >=WifiReconnect)) {
+  //     Serial.print(millis());
+  //     Serial.println(" Reconnecting to WiFi...");
+  //     WiFi.disconnect();
+  //     WiFi.reconnect();
+  //     WifiTimer = currentMillis;
+  //   }
+  // #endif
+  // WIFI status
   #if defined(WIFI)
     unsigned long currentMillis = millis();
     // if WiFi is down, try reconnecting every CHECK_WIFI_TIME seconds
     if ((WiFi.status() != WL_CONNECTED) && (currentMillis - WifiTimer >=WifiReconnect)) {
       Serial.print(millis());
-      Serial.println(" Reconnecting to WiFi...");
+      Serial.println("cReconnecting...");
       WiFi.disconnect();
       WiFi.reconnect();
       WifiTimer = currentMillis;
+    }
+  #endif
+
+  // WDT
+  #if defined(WDT)
+    if(millis()-WdtTimer > 60000){
+      esp_task_wdt_reset();
+      WdtTimer=millis();
     }
   #endif
 }
@@ -906,29 +1044,29 @@ void Watchdog(){
     if(R>100){
       dot1=2;
       dot2=5;
-      display.setFont(&Logisoso10pt7b);
+      gfx->setFont(&Logisoso10pt7b);
     }else{
       dot1=1.5;
       dot2=3;
-      display.setFont(&Logisoso8pt7b);
+      gfx->setFont(&Logisoso8pt7b);
     }
     if(R>100){
-      display.setCursor(Xcoordinate(0,X-5,R-10), Ycoordinate(0,Y,R-10));
-      display.println("N");
-      display.setCursor(Xcoordinate(90,X+5,R-10), Ycoordinate(90,Y+8,R-10));
-      display.println("E");
-      display.setCursor(Xcoordinate(180,X-6,R-10), Ycoordinate(180,Y+13,R-10));
-      display.println("S");
-      display.setCursor(Xcoordinate(270,X-16,R-10), Ycoordinate(270,Y+8,R-10));
-      display.println("W");
+      gfx->setCursor(Xcoordinate(0,X-5,R-10), Ycoordinate(0,Y,R-10));
+      gfx->println("N");
+      gfx->setCursor(Xcoordinate(90,X+5,R-10), Ycoordinate(90,Y+8,R-10));
+      gfx->println("E");
+      gfx->setCursor(Xcoordinate(180,X-6,R-10), Ycoordinate(180,Y+13,R-10));
+      gfx->println("S");
+      gfx->setCursor(Xcoordinate(270,X-16,R-10), Ycoordinate(270,Y+8,R-10));
+      gfx->println("W");
     }
     for (int j=0; j<36; j++) {
       if(j % 9 == 0){
         if(R<100){
-          display.fillCircle(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), dot2, colorW);
+          gfx->fillCircle(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), dot2, colorW);
         }
       }else{
-        display.fillCircle(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), dot1, colorW);
+        gfx->fillCircle(Xcoordinate(j*10,X,R), Ycoordinate(j*10,Y,R), dot1, colorW);
       }
     }
     if( mainHWdeviceSelect==0 || (mainHWdeviceSelect==1 && WindSpeedMaxPeriod>0) || mainHWdeviceSelect==2){
@@ -941,10 +1079,10 @@ void Watchdog(){
 void Arrow(int deg, int X, int Y, int r){
   int deg2 = deg+130;
   int deg3 = deg+230;
-  display.fillTriangle(Xcoordinate(deg,X,r), Ycoordinate(deg,Y,r), Xcoordinate(deg2,X,r/2), Ycoordinate(deg2,Y,r/2), Xcoordinate(deg+180,X,0), Ycoordinate(deg+180,Y,0), colorW);
-  display.fillTriangle(Xcoordinate(deg,X,r), Ycoordinate(deg,Y,r), Xcoordinate(deg3,X,r/2), Ycoordinate(deg3,Y,r/2), Xcoordinate(deg+180,X,0), Ycoordinate(deg+180,Y,0), colorW);
-  display.fillTriangle(Xcoordinate(deg+180,X,r), Ycoordinate(deg+180,Y,r), Xcoordinate(deg3,X,r/10), Ycoordinate(deg3,Y,r/10), Xcoordinate(deg+180,X,0), Ycoordinate(deg+180,Y,0), colorW);
-  display.fillTriangle(Xcoordinate(deg+180,X,r), Ycoordinate(deg+180,Y,r), Xcoordinate(deg2,X,r/10), Ycoordinate(deg2,Y,r/10), Xcoordinate(deg+180,X,0), Ycoordinate(deg+180,Y,0), colorW);
+  gfx->fillTriangle(Xcoordinate(deg,X,r), Ycoordinate(deg,Y,r), Xcoordinate(deg2,X,r/2), Ycoordinate(deg2,Y,r/2), Xcoordinate(deg+180,X,0), Ycoordinate(deg+180,Y,0), colorW);
+  gfx->fillTriangle(Xcoordinate(deg,X,r), Ycoordinate(deg,Y,r), Xcoordinate(deg3,X,r/2), Ycoordinate(deg3,Y,r/2), Xcoordinate(deg+180,X,0), Ycoordinate(deg+180,Y,0), colorW);
+  gfx->fillTriangle(Xcoordinate(deg+180,X,r), Ycoordinate(deg+180,Y,r), Xcoordinate(deg3,X,r/10), Ycoordinate(deg3,Y,r/10), Xcoordinate(deg+180,X,0), Ycoordinate(deg+180,Y,0), colorW);
+  gfx->fillTriangle(Xcoordinate(deg+180,X,r), Ycoordinate(deg+180,Y,r), Xcoordinate(deg2,X,r/10), Ycoordinate(deg2,Y,r/10), Xcoordinate(deg+180,X,0), Ycoordinate(deg+180,Y,0), colorW);
 }
 
 //-------------------------------------------------------------------------------------------------------
@@ -963,18 +1101,18 @@ void Arrow(int deg, int X, int Y, int r){
 void print_wifi_error(){
   switch(WiFi.status())
   {
-    case WL_IDLE_STATUS : Serial.println("WL_IDLE_STATUS"); break;
-    case WL_NO_SSID_AVAIL : Serial.println("WL_NO_SSID_AVAIL"); break;
-    case WL_CONNECT_FAILED : Serial.println("WL_CONNECT_FAILED"); break;
-    case WL_DISCONNECTED : Serial.println("WL_DISCONNECTED"); break;
-    default : Serial.printf("No know WiFi error"); break;
+    case WL_IDLE_STATUS : Serial.println("WiFi| WL_IDLE_STATUS"); break;
+    case WL_NO_SSID_AVAIL : Serial.println("WiFi| WL_NO_SSID_AVAIL"); break;
+    case WL_CONNECT_FAILED : Serial.println("WiFi| WL_CONNECT_FAILED"); break;
+    case WL_DISCONNECTED : Serial.println("WiFi| WL_DISCONNECTED"); break;
+    default : Serial.printf("WiFi| No know WiFi error"); break;
   }
 }
 
 //-------------------------------------------------------------------------------------------------------
 void Mqtt(){
   #if defined(MQTT)
-    if (millis()-MqttStatusTimer[0]>MqttStatusTimer[1] && (mainHWdeviceSelect==0 || mainHWdeviceSelect==1)){
+    if (proto==0 && millis()-MqttStatusTimer[0]>MqttStatusTimer[1] && (mainHWdeviceSelect==0 || mainHWdeviceSelect==1)){
       if(!mqttClient.connected()){
         long now = millis();
         if (now - lastMqttReconnectAttempt > 10000) {
@@ -1122,38 +1260,41 @@ bool mqttReconnect() {
         }
 
       // }
-      display.fillScreen(colorB);
-      display.setTextColor(colorW);
-      display.setFont(&Logisoso10pt7b);
-      display.setCursor(70, 150);
-      display.println("Connecting");
-      display.setFont(&Logisoso8pt7b);
-      display.setCursor(90, 190);
-      display.println("MicroSD import "+String(microSDlines)+" values");
-      display.fillCircle(80, 190-7, 3, colorW);
-      display.setCursor(90, 220);
-      display.println("WiFi "+String(SSID)+" "+String(WiFi.RSSI())+" dBm");
-      display.fillCircle(80, 220-7, 3, colorW);
-      display.setCursor(90, 250);
-      display.println(WiFi.localIP());
-      display.fillCircle(80, 250-7, 3, colorW);
-      display.setCursor(90, 280);
+      // low-power timer wake: skip the "Connecting" splash to keep the retained image (saves a ~3 s refresh)
+      if(!(lowPower && timerWake)){
+      gfx->fillScreen(colorB);
+      gfx->setTextColor(colorW);
+      gfx->setFont(&Logisoso10pt7b);
+      gfx->setCursor(70, 150);
+      gfx->println("Connecting");
+      gfx->setFont(&Logisoso8pt7b);
+      gfx->setCursor(90, 190);
+      gfx->println(String(mainHWdevice[mainHWdeviceSelect][1]));
+      gfx->fillCircle(80, 190-7, 3, colorW);
+      gfx->setCursor(90, 220);
+      gfx->println("WiFi "+String(SSID)+" "+String(WiFi.RSSI())+" dBm");
+      gfx->fillCircle(80, 220-7, 3, colorW);
+      gfx->setCursor(90, 250);
+      gfx->println(WiFi.localIP());
+      gfx->fillCircle(80, 250-7, 3, colorW);
+      gfx->setCursor(90, 280);
       if(mainHWdeviceSelect==0 || mainHWdeviceSelect==1){
-        display.println("MQTT "+String(TOPIC)+"#");
+        gfx->println("MQTT "+String(TOPIC)+"#");
       }else{
-        display.println("MQTT disable");
+        gfx->println("MQTT disable");
       }
-      display.fillCircle(80, 280-7, 3, colorW);
-      display.setCursor(90, 310);
-      display.println(String(mainHWdevice[mainHWdeviceSelect][1])+"...");
-      display.fillCircle(80, 310-7, 3, colorW);
-      display.setFont(&Logisoso8pt7b);
-      display.setCursor(15, 385);
+      gfx->fillCircle(80, 280-7, 3, colorW);
+      gfx->setCursor(90, 310);
+      gfx->println(String(mainHWdevice[mainHWdeviceSelect][1])+"...");
+      gfx->fillCircle(80, 310-7, 3, colorW);
+      gfx->setFont(&Logisoso8pt7b);
+      gfx->setCursor(15, 385);
       UtcTime(1).toCharArray(buf, 21);
-      display.println("UTC "+String(buf));
-      display.setCursor(200, 385);
-      display.print(REV);
-      display.display(false);
+      gfx->println("UTC "+String(buf));
+      gfx->setCursor(200, 385);
+      gfx->print(REV);
+      gfx->display(false);
+      }   // end skip-splash guard
       MqttPubString("get", "4eink", false);
     }
     return mqttClient.connected();
@@ -1186,6 +1327,7 @@ float payloadToFloat(byte *payload, unsigned int length){
       }
     }
   }
+  free(p);
   if(negativ==true){
     intBuf=-intBuf;
   }
@@ -1308,7 +1450,7 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
         // eInkNeedRefresh=true;
       }
 
-      CheckTopicBase = String(TOPIC) + "WindDir-azimuth";
+      CheckTopicBase = String(WX_TOPIC) + "WindDir-azimuth";
       if ( CheckTopicBase.equals( String(topic) )){
         WindDir=(int)payloadToFloat(payload, length);
         Serial.println("WindDir-azimuth "+String(WindDir)+"°az");
@@ -1337,29 +1479,266 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
 
     }
 
+    free(p);
   #endif
 } // MqttRx END
 
 //-----------------------------------------------------------------------------------
 void MqttPubString(String TOPICEND, String DATA, bool RETAIN){
   #if defined(MQTT)
-    char charbuf[50];
-     // memcpy( charbuf, mac, 6);
-     WiFi.macAddress().toCharArray(charbuf, 18);
     // if(EnableEthernet==1 && MQTT_ENABLE==1 && EthLinkStatus==1 && mqttClient.connected()==true){
     if(mqttClient.connected()==true && (mainHWdeviceSelect==0 || mainHWdeviceSelect==1)){
-      if (mqttClient.connect(charbuf)) {
-        Serial.print("TXmqtt > ");
-        String topic = String(TOPIC)+String(TOPICEND);
-        topic.toCharArray( mqttPath, 50 );
-        DATA.toCharArray( mqttTX, 50 );
-        mqttClient.publish(mqttPath, mqttTX, RETAIN);
-        Serial.print(mqttPath);
-        Serial.print(" ");
-        Serial.println(mqttTX);
-      }
+      Serial.print("TXmqtt > ");
+      String topic = String(TOPIC)+String(TOPICEND);
+      topic.toCharArray( mqttPath, 50 );
+      DATA.toCharArray( mqttTX, 50 );
+      mqttClient.publish(mqttPath, mqttTX, RETAIN);
+      Serial.print(mqttPath);
+      Serial.print(" ");
+      Serial.println(mqttTX);
     }
   #endif
+}
+
+//-----------------------------------------------------------------------------------
+// TrxNet receive path -----------------------------------------------------------------
+// All telemetry topics carry raw little-endian scaled integers (see TrxNet README).
+// We accept only messages whose sender name matches the configured source (e.g. WX.01).
+
+static int16_t  trxRd16(const uint8_t* d){ int16_t v;  memcpy(&v, d, 2); return v; }
+static uint16_t trxRdU16(const uint8_t* d){ uint16_t v; memcpy(&v, d, 2); return v; }
+
+// Magnus-formula dew point from current temperature + relative humidity (TrxNet has no /dewpoint).
+void recomputeDewPoint(){
+  float rh = constrain(HumidityRel, 1.0f, 100.0f);
+  const float a = 17.62f, b = 243.12f;
+  float g = log(rh/100.0f) + (a*Temperature)/(b+Temperature);
+  DewPoint = (b*g)/(a-g);
+}
+
+static bool trxFromSource(const char* from){
+  return trxSource.length()==0 || strcmp(from, trxSource.c_str())==0;
+}
+static void trxMark(){          // mirror what MqttRx does on every accepted message
+  RxMqttTimer = millis();
+  WDTimer();
+  eInkNeedRefresh = true;
+}
+
+void onTrxTemp(const char* from, const uint8_t* d, size_t l){
+  if(!trxFromSource(from) || l<2) return;
+  Temperature = trxRd16(d)/100.0f;  recomputeDewPoint();
+  Serial.println("RXtrx < /temp "+String(Temperature)+"C");
+  trxMark();
+}
+void onTrxHum(const char* from, const uint8_t* d, size_t l){
+  if(!trxFromSource(from) || l<2) return;
+  HumidityRel = trxRdU16(d)/100.0f;  recomputeDewPoint();
+  Serial.println("RXtrx < /hum "+String(HumidityRel)+"%");
+  trxMark();
+}
+void onTrxPress(const char* from, const uint8_t* d, size_t l){
+  if(!trxFromSource(from) || l<2) return;
+  Pressure = trxRdU16(d)/10.0f;
+  Serial.println("RXtrx < /press "+String(Pressure)+"hPa");
+  trxMark();
+}
+void onTrxRain(const char* from, const uint8_t* d, size_t l){
+  if(!trxFromSource(from) || l<2) return;
+  RainToday = trxRdU16(d)/100.0f;
+  Serial.println("RXtrx < /rain "+String(RainToday)+"mm");
+  trxMark();
+}
+void onTrxWindDir(const char* from, const uint8_t* d, size_t l){
+  if(!trxFromSource(from) || l<2) return;
+  WindDir = trxRdU16(d);
+  Serial.println("RXtrx < /winddir "+String(WindDir));
+  trxMark();
+}
+void onTrxWindAvg(const char* from, const uint8_t* d, size_t l){
+  if(!trxFromSource(from) || l<2) return;
+  WindSpeedAvg = trxRdU16(d)/100.0f;
+  Serial.println("RXtrx < /windavg "+String(WindSpeedAvg)+"m/s");
+  trxMark();
+}
+void onTrxWindMax(const char* from, const uint8_t* d, size_t l){
+  if(!trxFromSource(from) || l<2) return;
+  WindSpeedMaxPeriod = trxRdU16(d)/100.0f;
+  Serial.println("RXtrx < /windmax "+String(WindSpeedMaxPeriod)+"m/s");
+  trxMark();
+}
+void onTrxAzimuth(const char* from, const uint8_t* d, size_t l){
+  if(!trxFromSource(from) || l<2) return;
+  Azimuth = trxRdU16(d);
+  Serial.println("RXtrx < /azimuth "+String(Azimuth));
+  RxMqttTimer = millis();
+  WDTimer();
+  if( (AzimuthTmp!=Azimuth && abs(Azimuth-AzimuthTmp)>3) || eInkOfflineDetect==true ){
+    eInkNeedRefresh = true;
+    AzimuthTmp = Azimuth;
+  }
+}
+
+// Join the network and subscribe to the topic set for the selected device type.
+// E-ink is a pure receiver: it publishes nothing; the source station sends a state
+// snapshot to us on join via its onPeerAdded handler.
+void onTrxPeer(const TrxPeer* p){   // discovery diagnostics on Serial
+  if(p) Serial.println("TRX | peer + "+String(p->name)+" "+p->ip.toString());
+}
+
+// Subscribe to the topic set for one device type, dropping the other type's set first.
+// No-op when already subscribed to that type. Used both at boot and on a runtime
+// type switch by the auto-select logic.
+void trxSubscribeFor(int type){
+  if(type == trxCurSelect) return;
+  trxNet.unsubscribe("/azimuth");
+  trxNet.unsubscribe("/temp");    trxNet.unsubscribe("/hum");
+  trxNet.unsubscribe("/press");   trxNet.unsubscribe("/rain");
+  trxNet.unsubscribe("/winddir"); trxNet.unsubscribe("/windavg");
+  trxNet.unsubscribe("/windmax");
+  if(type==0){
+    trxNet.subscribe("/azimuth", onTrxAzimuth);
+  }else{
+    trxNet.subscribe("/temp",    onTrxTemp);
+    trxNet.subscribe("/hum",     onTrxHum);
+    trxNet.subscribe("/press",   onTrxPress);
+    trxNet.subscribe("/rain",    onTrxRain);
+    trxNet.subscribe("/winddir", onTrxWindDir);
+    trxNet.subscribe("/windavg", onTrxWindAvg);
+    trxNet.subscribe("/windmax", onTrxWindMax);
+  }
+  trxCurSelect = type;
+}
+
+void trxBegin(){
+  // Own identity: INK.<devid>, or a MAC-derived fallback so a zero-config unit still
+  // has a unique name to be greeted/CON-ACKed and matched on PROBE-reconnect.
+  if(deviceId.length()>0){
+    trxOwnName = "INK." + deviceId;
+  }else{
+    uint8_t mac[6]; WiFi.macAddress(mac);
+    char b[4]; sprintf(b, "%02X", mac[5]);
+    trxOwnName = "INK." + String(b);
+  }
+  trxNet.setPort(udpPort);
+  trxNet.onPeerAdded(onTrxPeer);
+  trxNet.begin(trxOwnName.c_str());
+  trxStartMs = millis();
+  Serial.println("TRX | begin name="+trxOwnName+" port="+String(udpPort)
+                 +" cfgSource="+(trxCfgSource.length()? trxCfgSource : String("(auto)")));
+  trxSubscribeFor(mainHWdeviceSelect);   // subscribe configured/default type up front
+}
+
+// "WiFi connected, waiting for data" splash for TrxNet mode — shown after WiFi is up
+// so the stale "Connecting WiFi" screen is replaced until the first telemetry arrives.
+void drawTrxWaiting(){
+  char buf[24];
+  gfx->fillScreen(colorB);
+  gfx->setTextColor(colorW);
+  gfx->setFont(&Logisoso10pt7b);
+  gfx->setCursor(30, 90);  gfx->println("WiFi connected");
+  gfx->setFont(&Logisoso8pt7b);
+  gfx->setCursor(30, 140); gfx->println("waiting for data...");
+  gfx->setCursor(90, 200); gfx->println(String(mainHWdevice[mainHWdeviceSelect][1]));
+  gfx->fillCircle(80, 200-7, 3, colorW);
+  gfx->setCursor(90, 230); gfx->println("WiFi "+String(SSID)+" "+String(WiFi.RSSI())+" dBm");
+  gfx->fillCircle(80, 230-7, 3, colorW);
+  gfx->setCursor(90, 260); gfx->println(WiFi.localIP());
+  gfx->fillCircle(80, 260-7, 3, colorW);
+  gfx->setCursor(90, 290); gfx->println("TrxNet "+trxOwnName);
+  gfx->fillCircle(80, 290-7, 3, colorW);
+  gfx->setCursor(90, 320); gfx->println("src "+(trxSource.length()? trxSource : String("(auto)")));
+  gfx->fillCircle(80, 320-7, 3, colorW);
+  gfx->setCursor(15, 385); UtcTime(1).toCharArray(buf, 21); gfx->println("UTC "+String(buf));
+  gfx->setCursor(200, 385); gfx->print(REV);
+  gfx->display(false);
+}
+
+// --- runtime source auto-select helpers -------------------------------------------
+static int trxTypeOfPeer(const char* name){      // -> layout type, or -1 if unsupported
+  if(strncmp(name, "WX.",  3)==0) return 1;
+  if(strncmp(name, "ROT.", 4)==0) return 0;
+  return -1;
+}
+static bool trxPeerPresent(const String& name){  // is an active peer with this exact name?
+  if(name.length()==0) return false;
+  for(int i=0;i<trxNet.peerCount();i++){
+    const TrxPeer* p = trxNet.peer(i);
+    if(p && name == p->name) return true;
+  }
+  return false;
+}
+// Pick the best supported peer: prefer one matching preferType, else any; tie-break on
+// the lexicographically lowest name so the choice is stable across reboots.
+static String trxChooseBest(int preferType){
+  String best=""; int bestType=-1;
+  for(int i=0;i<trxNet.peerCount();i++){
+    const TrxPeer* p = trxNet.peer(i);
+    if(!p) continue;
+    int t = trxTypeOfPeer(p->name);
+    if(t<0) continue;
+    String nm = String(p->name);
+    if(best.length()==0){ best=nm; bestType=t; continue; }
+    bool candMatch = (t==preferType), bestMatch = (bestType==preferType);
+    if(candMatch && !bestMatch){ best=nm; bestType=t; }
+    else if(candMatch==bestMatch && nm < best){ best=nm; bestType=t; }
+  }
+  return best;
+}
+// Apply a source selection: re-subscribe/flip layout, update display label (~ marker
+// when auto-picked) and trigger a refresh.
+static void trxSetSource(const String& name, int type, bool autoPicked){
+  trxSubscribeFor(type);
+  mainHWdeviceSelect = type;
+  trxSource     = name;
+  trxAutoPicked = autoPicked;
+  String disp   = (autoPicked && name.length()) ? ("~"+name) : name;
+  TOPIC = disp;
+  if(type==0) Name = disp;          // ROT layout draws Name (and needs it != "")
+  // No forced redraw here: globals hold no data for the new source yet, so the layout
+  // is repainted by the first accepted message (trxMark) — until then the waiting
+  // splash / previous data stays rather than flashing empty/stale values.
+  Serial.println("TRX | source -> "+disp+(autoPicked?" (auto)":" (cfg)"));
+}
+
+// Run from TrxLoop(): keep trxSource pointing at the configured peer when present,
+// otherwise auto-pick a supported peer from the scan (after a short grace for the
+// configured one). Pure RAM — nothing here is written to NVS.
+void trxMaintainSource(){
+  static uint32_t lastChk=0;
+  if(millis()-lastChk < 1000) return;
+  lastChk = millis();
+
+  // 1) configured source present -> use it / reclaim it from an auto-pick
+  if(trxCfgSource.length()>0 && trxPeerPresent(trxCfgSource)){
+    if(trxAutoPicked || trxSource!=trxCfgSource || mainHWdeviceSelect!=trxCfgSelect)
+      trxSetSource(trxCfgSource, trxCfgSelect, false);
+    return;
+  }
+  // configured but absent: hold for the grace window before the first fallback
+  if(trxCfgSource.length()>0 && !trxAutoPicked && (millis()-trxStartMs < 10000UL))
+    return;
+
+  // 2) keep a still-valid auto-pick
+  if(trxAutoPicked && trxPeerPresent(trxSource)) return;
+
+  // 3) (re)pick the best supported peer; if none, go offline/clear
+  String best = trxChooseBest(trxCfgSelect);
+  if(best.length()>0){
+    if(best!=trxSource || !trxAutoPicked)
+      trxSetSource(best, trxTypeOfPeer(best.c_str()), true);
+  }else if(trxAutoPicked){
+    // our auto-pick vanished and nothing else is available -> back to the waiting splash
+    trxSource=""; trxAutoPicked=false; TOPIC="";
+    if(mainHWdeviceSelect==0) Name="";
+    drawTrxWaiting();
+  }
+}
+
+void TrxLoop(){
+  if(proto!=1) return;
+  trxNet.loop();
+  trxMaintainSource();
 }
 
 //-------------------------------------------------------------------------------------------------------
@@ -1403,247 +1782,516 @@ int readFile(fs::FS &fs, const char *path)
 }
 
 //-------------------------------------------------------------------------------------------------------
-int SDtestInit(){
-  /*
-  .SD Card Type: SDSC, size: 124 Mb
+// Low power (battery) mode -----------------------------------------------------------------------------
 
+// Battery voltage in volts. analogReadMilliVolts() already applies the chip's factory eFuse ADC
+// calibration; we multisample to denoise. Needs the e-paper supply (GPIO2) HIGH, set in setup().
+float lpBatteryVolts(){
+  uint32_t mv = 0;
+  for(int i=0;i<8;i++) mv += analogReadMilliVolts(LP_BAT_PIN);
+  return (mv / 8.0f) * LP_DIVIDER_RATIO / 1000.0f;
+}
 
-  */
-	char disp[50];
-	uint8_t cardType;
-	uint64_t cardSize;
-	if (!SD.begin(SD_CS, spiSD)){
-			return -1;
-		}
-	cardType = SD.cardType();
-	if (cardType == CARD_NONE){
-		return -1;
-	}
-	cardSize = SD.cardSize() / (1024 * 1024);
-  Serial.print("SD Card Type: ");
-	if (cardType == CARD_MMC){
-		Serial.print("MMC");
-	}
-	else if (cardType == CARD_SD){
-		Serial.print("SDSC");
-	}
-	else if (cardType == CARD_SDHC){
-    Serial.print("SDHC");
-	}
-	else {
-    Serial.print("UNKNOWN");
-	}
-  Serial.print(", size: ");
-  Serial.print(cardSize);
-  Serial.println(" Mb");
-	return 0;
+// Draw a battery indicator (voltage + small gauge) in the top-right corner. Called from eInkRefresh
+// just before display() so it rides along on the same panel update.
+void lpDrawBattery(){
+  if(!lowPower || lpVbat < 2.5f) return;   // skip when no real battery (USB-only reads near 0)
+  char b[12];
+  dtostrf(lpVbat, 0, 2, b);
+  gfx->setFont(&Logisoso8pt7b);
+  gfx->setTextColor(colorW);
+  // gauge body
+  gfx->drawRect(338, 6, 22, 11, colorW);
+  gfx->fillRect(360, 9, 2, 5, colorW);
+  int fill = (int)((constrain(lpVbat, 3.30f, 4.20f) - 3.30f) / (4.20f - 3.30f) * 18.0f);
+  if(fill > 0) gfx->fillRect(340, 8, fill, 7, colorW);
+  gfx->setCursor(296, 16);
+  gfx->print(String(b) + "V");
+  if(lpVbat < LP_BAT_WARN){
+    gfx->setCursor(250, 16);
+    gfx->print("!");
+  }
+  float days = lpEstimateDays();
+  if(days > 0.0f){
+    gfx->setCursor(300, 30);
+    gfx->print("~" + String(days < 10 ? days : (float)(int)days, days < 10 ? 1 : 0) + "d");
+  }
+}
+
+// Final low-battery screen, then park: long sleep until recharged + reset/checked again.
+void lpDrawRecharge(float vb){
+  char b[12]; dtostrf(vb, 0, 2, b);
+  gfx->fillScreen(colorB);
+  gfx->setTextColor(colorW);
+  gfx->setFont(&Logisoso50pt7b);
+  gfx->setCursor(40, 110); gfx->println("LOW");
+  gfx->setCursor(40, 175); gfx->println("BATT");
+  gfx->setFont(&Logisoso10pt7b);
+  gfx->setCursor(40, 230); gfx->println(String(b) + " V");
+  gfx->setCursor(40, 270); gfx->println("Recharge the battery");
+  gfx->setFont(&Logisoso8pt7b);
+  gfx->setCursor(200, 385); gfx->print(REV);
+  gfx->display(false);
+  gfx->hibernate();
+}
+
+// Rough battery-runtime estimate in days. No fuel gauge on this board, so this is a model, not a
+// measurement: the awake-window length is measured (EMA in RTC), the active/sleep currents are
+// assumed constants. Good for an order-of-magnitude figure and for comparing wake intervals.
+float lpEstimateDays(){
+  if(!lowPower || batCapacity == 0) return 0.0f;
+  float awakeMs    = (rtcAwakeAvgMs > 0) ? (float)rtcAwakeAvgMs : 6000.0f;   // 6 s default until measured
+  float intervalMs = (float)lpInterval * 60000.0f;
+  if(awakeMs > intervalMs) awakeMs = intervalMs;
+  float avg_mA = (awakeMs * LP_I_ACTIVE_MA + (intervalMs - awakeMs) * LP_I_SLEEP_MA) / intervalMs;
+  if(avg_mA <= 0.0f) return 0.0f;
+  return (float)batCapacity / avg_mA / 24.0f;
+}
+
+// Power down the e-paper controller and enter deep sleep for the configured interval. Holds the
+// e-paper supply pin across sleep (LaskaKit pattern) so the retained image stays clean. Never returns.
+void lpEnterDeepSleep(){
+  // record this awake window (time since boot) for the runtime estimate - only representative timer
+  // wakes count, not the long cold-boot grace window or the parked state.
+  if(timerWake && !rtcParked){
+    uint32_t aw = millis();
+    rtcAwakeAvgMs = (rtcAwakeAvgMs == 0) ? aw : (rtcAwakeAvgMs * 3 + aw) / 4;
+  }
+  uint64_t mins = rtcParked ? 360ULL : (uint64_t)lpInterval;  // parked: re-check every 6 h
+  if(mins < 1) mins = 1;
+  Serial.println("LP | deep sleep " + String((unsigned long)mins) + " min (boot #" + String(rtcBootCount) + ")");
+  Serial.flush();
+  gfx->hibernate();
+  pinMode(LP_POWER_PIN, OUTPUT);
+  digitalWrite(LP_POWER_PIN, LOW);             // power the e-paper supply OFF; the bistable image stays
+  gpio_hold_en((gpio_num_t)LP_POWER_PIN);      // pin a clean LOW across deep sleep (and through reset)
+  gpio_deep_sleep_hold_en();
+  WiFi.disconnect(true, false);
+  esp_sleep_enable_timer_wakeup(mins * 60ULL * uS_TO_S_FACTOR);
+  esp_deep_sleep_start();
+}
+
+// Called once in setup() after the panel + config are up: classify the wake, release the sleep GPIO
+// hold, and enforce battery protection before any Wi-Fi is started.
+void lpInit(){
+  timerWake = (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_TIMER);
+  rtcBootCount++;
+  // (the GPIO2 sleep-hold was already released at the top of setup, before the panel init)
+
+  if(!lowPower || APmode) return;        // battery protection only in configured low-power operation
+
+  lpVbat = lpBatteryVolts();
+  Serial.println("LP | wake=" + String(timerWake ? "timer" : "cold") + " Vbat=" + String(lpVbat, 2) + " parked=" + String(rtcParked));
+
+  // Below ~2.5 V means no battery / USB-only (divider reads near 0) - don't park on a bad reading.
+  bool valid = (lpVbat > 2.5f);
+  bool critical = valid && ((lpVbat < LP_BAT_CRIT) || (rtcParked && lpVbat < LP_BAT_RESUME));
+  if(critical){
+    rtcParked = true;
+    lpDrawRecharge(lpVbat);
+    lpEnterDeepSleep();                  // never returns
+  }
+  rtcParked = false;                     // recovered (or never parked) -> normal operation
+}
+
+// Run every loop() in STA mode: decide when the awake window is done and go to sleep.
+//  - timer wake: sleep as soon as a fresh reading is shown, or when the budget runs out.
+//  - cold boot/RESET: stay awake the grace window (web config reachable), then sleep.
+void lowPowerManage(){
+  if(!lowPower || APmode) return;
+  static uint32_t t0 = millis();
+  if(timerWake){
+    if(lpDataHandled || millis() - t0 > LP_WAKE_BUDGET_MS) lpEnterDeepSleep();
+  }else{
+    if(millis() - t0 > LP_GRACE_MS) lpEnterDeepSleep();
+  }
+}
+
+// Hash of the WX values currently in the globals, used to skip a (slow) panel refresh when nothing
+// the user can see has changed since the last drawn frame. Battery (0.1 V) and offline state are
+// included so those still trigger a redraw.
+uint32_t lpWxHash(){
+  uint32_t h = 2166136261UL;
+  int v[8] = {
+    (int)lroundf(Temperature*10), (int)lroundf(HumidityRel), (int)lroundf(DewPoint),
+    (int)lroundf(Pressure), WindDir, (int)lroundf(WindSpeedMaxPeriod*10),
+    (int)lroundf(RainToday*10), (int)lroundf(lpVbat*10)
+  };
+  for(int i=0;i<8;i++){ h ^= (uint32_t)v[i]; h *= 16777619UL; }
+  h ^= (uint32_t)(eInkOfflineDetect?1:0); h *= 16777619UL;
+  return h;
+}
+
+// Configuration (NVS via Preferences) ------------------------------------------------------------------
+
+void loadConfig(){
+  prefs.begin(NVS_NS, true);   // read-only
+  APmode = prefs.getBool("apmode", true);   // fresh NVS (first boot) -> AP mode
+  for(int i=0;i<4;i++){
+    wifiSSID[i] = prefs.getString(("ssid"+String(i)).c_str(), "");
+    wifiPSWD[i] = prefs.getString(("pass"+String(i)).c_str(), "");
+  }
+  mainHWdeviceSelect = prefs.getInt("devsel", 1);
+  topicBase          = prefs.getString("topic", "");
+  mqttBroker[0]      = prefs.getUChar("mqip0", 0);
+  mqttBroker[1]      = prefs.getUChar("mqip1", 0);
+  mqttBroker[2]      = prefs.getUChar("mqip2", 0);
+  mqttBroker[3]      = prefs.getUChar("mqip3", 0);
+  MQTT_PORT          = prefs.getUShort("mqport", 1883);
+  eInkRotation       = prefs.getUChar("rot", 1);
+  eInkNegativ        = prefs.getBool("neg", true);
+  OfflineTimeout     = prefs.getUChar("offto", 6);
+  usUnits            = prefs.getBool("units", false);
+  int  tzh           = prefs.getInt("tzh", 0);
+  bool dst           = prefs.getBool("dst", false);
+  ntpServer          = prefs.getString("ntp", "pool.ntp.org");
+  dispType           = prefs.getUChar("disp", 0);
+  proto              = prefs.getUChar("proto", 0);
+  udpPort            = prefs.getUShort("udpport", 5683);
+  deviceId           = prefs.getString("devid", "");
+  lowPower           = prefs.getBool("lowpwr", false);
+  lpInterval         = prefs.getUShort("lpint", 15);
+  batCapacity        = prefs.getUShort("batcap", 0);
+  prefs.end();
+
+  gmtOffset_sec      = (long)tzh * 3600L;
+  daylightOffset_sec = dst ? 3600 : 0;
+  Serial.println("CFG| loaded (apmode="+String(APmode)+" devsel="+String(mainHWdeviceSelect)+" disp="+String(dispType)+")");
+}
+
+void applyDerivedConfig(){
+  mqtt_server_ip = IPAddress(mqttBroker[0], mqttBroker[1], mqttBroker[2], mqttBroker[3]);
+  if(eInkNegativ){ colorB = GxEPD_BLACK; colorW = GxEPD_WHITE; eInkNegativTmp = true; }
+  else           { colorB = GxEPD_WHITE; colorW = GxEPD_BLACK; eInkNegativTmp = false; }
+  // single topic base from the UI; firmware appends /ROT/ or /WX/ per device type
+  ROT_TOPIC = topicBase + String(mainHWdevice[0][0]);
+  WX_TOPIC  = topicBase + String(mainHWdevice[1][0]);
+  if(mainHWdeviceSelect==0)      TOPIC = ROT_TOPIC;
+  else if(mainHWdeviceSelect==1) TOPIC = WX_TOPIC;
+
+  // TrxNet: build the configured source/identity. trxOwnName (which may need the MAC
+  // fallback) is finalised in trxBegin() once WiFi is up. With no devid there is no
+  // configured source -> trxCfgSource stays empty and the runtime auto-select takes over.
+  if(proto==1){
+    String pfx   = (mainHWdeviceSelect==0) ? "ROT." : "WX.";
+    trxCfgSource = (deviceId.length()>0) ? (pfx + deviceId) : String("");
+    trxCfgSelect = mainHWdeviceSelect;
+    trxSource    = trxCfgSource;     // start on the configured source (may be empty)
+    trxAutoPicked= false;
+    TOPIC = trxSource;               // display shows device ID in place of the MQTT topic
+    if(mainHWdeviceSelect==0) Name = trxSource;  // ROT refresh gate needs Name != ""
+  }
+}
+
+// Instantiate the e-paper driver for the panel selected in NVS ("disp"). Different panels are
+// different GxEPD2 template types, so they share the GxEPD2_GFX base via a heap pointer.
+void initDisplay(){
+  switch(dispType){
+    case 1:
+      gfx = new GxEPD2_BW<GxEPD2_420_GDEY042T81, GxEPD2_420_GDEY042T81::HEIGHT>(GxEPD2_420_GDEY042T81(/*CS=*/SS, /*DC=*/17, /*RST=*/16, /*BUSY=*/4));
+      break;
+    case 2:
+      gfx = new GxEPD2_3C<GxEPD2_420c_Z21, GxEPD2_420c_Z21::HEIGHT/2>(GxEPD2_420c_Z21(/*CS=*/SS, /*DC=*/17, /*RST=*/16, /*BUSY=*/4));
+      break;
+    default:
+      gfx = new GxEPD2_BW<GxEPD2_420, GxEPD2_420::HEIGHT>(GxEPD2_420(/*CS=*/SS, /*DC=*/17, /*RST=*/16, /*BUSY=*/4));
+      break;
+  }
 }
 
 //-------------------------------------------------------------------------------------------------------
-void SDtest(){
-  static int intCount = 0;
-	// if(SDtestInit()==-1){
-  	while (SDtestInit()){
-      if(intCount==0){
-        Serial.println("SD card not found");
-      }
-      if(intCount==1){
-        display.fillScreen(colorW);
-        display.setTextColor(colorB);
-        display.setFont(&Logisoso10pt7b);
-        display.setCursor(40, 120);
-        display.println("!");
-        display.setCursor(40, 160);
-        display.println("SD card not found");
-        display.setCursor(40, 190);
-        display.println("insert formated SD card");
-        display.setCursor(40, 220);
-        display.println("with setup.cfg file");
-        display.setCursor(40, 250);
-        display.println("and reboot the device");
-        display.display(false);
-      }
-      Serial.print(".");
-      delay(1000);
-      intCount++;
-  		// SD.end();
-  		// return;
-      // while(true);
-  	}
+// WiFi -------------------------------------------------------------------------------------------------
 
+// Scan, then connect to the strongest reachable stored network; on failure try the next strongest.
+// Returns false if no stored network could be joined (caller reboots into AP mode).
+bool connectWifi(){
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(true);
+  delay(100);
 
-	Serial.println("Init SDcard done");
+  // Low-power timer wake: skip the connecting splash (keeps the retained image; a full refresh costs
+  // ~3 s) and try a direct connect to the AP cached in RTC memory, skipping the scan entirely.
+  bool lpWake = (lowPower && timerWake);
+  if(!lpWake){
+    gfx->fillScreen(colorB);
+    gfx->setTextColor(colorW);
+    gfx->setFont(&Logisoso10pt7b);
+    gfx->setCursor(30, 120);
+    gfx->println("Connecting WiFi");
+    gfx->setFont(&Logisoso8pt7b);
+    gfx->setCursor(200, 385);
+    gfx->print(REV);
+    gfx->display(false);
+  }else if(rtcBssidValid && rtcSlot>=0 && rtcSlot<4 && wifiSSID[rtcSlot].length()>0){
+    SSID = wifiSSID[rtcSlot];
+    PSWD = wifiPSWD[rtcSlot];
+    Serial.println("WIFI| fast reconnect to '"+SSID+"' ch"+String(rtcChannel)+" (cached BSSID)");
+    WiFi.begin(SSID.c_str(), PSWD.c_str(), rtcChannel, rtcBssid);
+    int tryc = 0;
+    while(WiFi.status()!=WL_CONNECTED && tryc<wifi_max_try){ delay(300); Serial.print("."); tryc++; }
+    Serial.println();
+    if(WiFi.status()==WL_CONNECTED){
+      Serial.println("WIFI| connected (fast), IP "+WiFi.localIP().toString());
+      return true;
+    }
+    Serial.println("WIFI| fast reconnect failed - full scan");
+    WiFi.disconnect(true); delay(200);
+  }
 
-  ConfigFile.toCharArray(charConfigFile, sizeof(charConfigFile));
-  if(!SD.exists(charConfigFile)){
-    Serial.print(ConfigFile);
-    Serial.println(" not found");
-    display.fillScreen(colorW);
-    display.setTextColor(colorB);
-    display.setFont(&Logisoso10pt7b);
-    display.setCursor(40, 120);
-    display.println("!");
-    display.setCursor(40, 160);
-    display.println("setup.cfg");
-    display.setCursor(40, 190);
-    display.println("not found on microSD");
-    display.setCursor(40, 220);
-    display.println("please upload the file");
-    display.setCursor(40, 250);
-    display.println("and reboot the device");
-    display.display(false);
-    while(!SD.exists(charConfigFile)){
-      Serial.print(".");
-      delay(1000);
+  Serial.println("WIFI| scanning...");
+  int n = WiFi.scanNetworks();
+
+  struct Cand { int slot; int rssi; };
+  Cand cands[4]; int nc = 0;
+  for(int s=0;s<4;s++){
+    if(wifiSSID[s].length()==0) continue;
+    int bestRssi = -999; bool seen = false;
+    for(int i=0;i<n;i++){
+      if(WiFi.SSID(i) == wifiSSID[s]){ seen = true; if(WiFi.RSSI(i) > bestRssi) bestRssi = WiFi.RSSI(i); }
+    }
+    if(seen){ cands[nc].slot = s; cands[nc].rssi = bestRssi; nc++; }
+  }
+  for(int a=0;a<nc;a++) for(int b=a+1;b<nc;b++) if(cands[b].rssi > cands[a].rssi){ Cand t=cands[a]; cands[a]=cands[b]; cands[b]=t; }
+  WiFi.scanDelete();
+
+  if(nc==0){ Serial.println("WIFI| no known network visible"); return false; }
+
+  for(int c=0;c<nc;c++){
+    int s = cands[c].slot;
+    SSID = wifiSSID[s];
+    PSWD = wifiPSWD[s];
+    Serial.print("WIFI| connecting to '"+SSID+"' ("+String(cands[c].rssi)+" dBm) ");
+    WiFi.begin(SSID.c_str(), PSWD.c_str());
+    int tryc = 0;
+    while(WiFi.status()!=WL_CONNECTED && tryc<wifi_max_try){ delay(500); Serial.print("."); tryc++; }
+    Serial.println();
+    if(WiFi.status()==WL_CONNECTED){
+      Serial.println("WIFI| connected, IP "+WiFi.localIP().toString()+"  "+String(WiFi.RSSI())+" dBm");
+      // cache this AP so a low-power timer wake can reconnect without scanning
+      if(WiFi.BSSID()){ memcpy(rtcBssid, WiFi.BSSID(), 6); rtcChannel = WiFi.channel(); rtcSlot = s; rtcBssidValid = true; }
+      return true;
+    }
+    Serial.println("WIFI| failed, trying next known network");
+    WiFi.disconnect(true); delay(200);
+  }
+  return false;
+}
+
+void startAPmode(){
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(ssidAP, passwordAP);
+  IPAddress IP = WiFi.softAPIP();
+  MACString = WiFi.softAPmacAddress();
+  Serial.println(" AP | SSID '"+String(ssidAP)+"'  IP "+IP.toString());
+
+  dnsServer.start(DNS_PORT, "*", IP);   // captive portal: resolve every host to us
+  if(MDNS.begin("esp32eink")) MDNS.addService("http", "tcp", 80);
+
+  gfx->fillScreen(colorB);
+  gfx->setTextColor(colorW);
+  gfx->setFont(&Logisoso50pt7b);
+  gfx->setCursor(30, 88);  gfx->println("AP");
+  gfx->setFont(&Logisoso10pt7b);
+  gfx->setCursor(130, 38); gfx->println("e-ink");
+  gfx->setCursor(130, 63); gfx->println("WiFi");
+  gfx->setCursor(130, 88); gfx->println("setup");
+  gfx->setCursor(30, 140); gfx->println("Connect phone/PC to WiFi");
+  gfx->setCursor(30, 170); gfx->println("'"+String(ssidAP)+"'");
+  gfx->setCursor(30, 200); gfx->println("password '"+String(passwordAP)+"'");
+  gfx->setCursor(30, 245); gfx->println("then open in a browser:");
+  gfx->setCursor(30, 280); gfx->println("http://esp32eink.local");
+  gfx->setCursor(30, 310); gfx->println("or http://"+IP.toString());
+  gfx->setFont(&Logisoso8pt7b);
+  gfx->setCursor(200, 385); gfx->print(REV);
+  gfx->display(false);
+}
+
+//-------------------------------------------------------------------------------------------------------
+// Web UI (served from SPIFFS, gzip-aware) --------------------------------------------------------------
+
+String jsonEsc(const String& s){
+  String o; o.reserve(s.length()+8);
+  for(unsigned int i=0;i<s.length();i++){
+    char c = s[i];
+    if(c=='"'||c=='\\'){ o+='\\'; o+=c; }
+    else if(c=='\n') o+="\\n";
+    else if(c=='\r') {}
+    else if(c=='\t') o+="\\t";
+    else o+=c;
+  }
+  return o;
+}
+
+String webContentType(const String& path){
+  String p = path;
+  if(p.endsWith(".gz")) p = p.substring(0, p.length()-3);
+  if(p.endsWith(".html")||p.endsWith(".htm")) return "text/html";
+  if(p.endsWith(".css"))  return "text/css";
+  if(p.endsWith(".js"))   return "application/javascript";
+  if(p.endsWith(".json")) return "application/json";
+  if(p.endsWith(".svg"))  return "image/svg+xml";
+  if(p.endsWith(".png"))  return "image/png";
+  if(p.endsWith(".ico"))  return "image/x-icon";
+  return "text/plain";
+}
+
+// Stream a SPIFFS file, preferring a .gz sibling (the core auto-sets Content-Encoding: gzip).
+bool streamSpiffsFile(const String& path){
+  if(!FsMounted) return false;
+  String gz = path + ".gz";
+  if(SPIFFS.exists(gz)){
+    File f = SPIFFS.open(gz, "r");
+    if(!f) return false;
+    ajaxserver.streamFile(f, webContentType(path));
+    f.close();
+    return true;
+  }
+  if(SPIFFS.exists(path)){
+    File f = SPIFFS.open(path, "r");
+    if(!f) return false;
+    ajaxserver.streamFile(f, webContentType(path));
+    f.close();
+    return true;
+  }
+  return false;
+}
+
+static const char SETUP_FALLBACK_HTML[] PROGMEM =
+  "<!doctype html><meta charset=utf-8><title>e-ink</title>"
+  "<body style='font-family:sans-serif;background:#333;color:#ddd;text-align:center;padding:2em'>"
+  "<h2>e-ink setup</h2><p>Web UI not in flash yet.<br>Flash <code>build/spiffs.bin</code> to the SPIFFS"
+  " partition over USB.</p></body>";
+
+void handleRoot(){
+  if(streamSpiffsFile("/setup.html")) return;
+  ajaxserver.send_P(200, "text/html", SETUP_FALLBACK_HTML);
+}
+
+void handleStatic(){
+  String path = ajaxserver.uri();
+  if(path.endsWith("/")) path += "setup.html";
+  if(streamSpiffsFile(path)) return;
+  int slash = path.lastIndexOf('/');
+  if(path.indexOf('.', slash) < 0 && streamSpiffsFile(path + ".html")) return;
+  if(APmode){   // captive portal: send every unknown request to the setup page
+    ajaxserver.sendHeader("Location", String("http://")+WiFi.softAPIP().toString()+"/setup", true);
+    ajaxserver.send(302, "text/plain", "");
+    return;
+  }
+  ajaxserver.send(404, "text/plain", "404: not found");
+}
+
+// GET /api/config - current settings + diagnostics, hand-built JSON.
+void handleApiConfig(){
+  String j; j.reserve(900);
+  j  = "{";
+  for(int i=0;i<4;i++){
+    j += "\"ssid"+String(i)+"\":\"" + jsonEsc(wifiSSID[i]) + "\",";
+    j += "\"pass"+String(i)+"\":\"" + jsonEsc(wifiPSWD[i]) + "\",";
+  }
+  j += "\"devsel\":" + String(mainHWdeviceSelect) + ",";
+  j += "\"topic\":\"" + jsonEsc(topicBase) + "\",";
+  j += "\"mqttIp\":\"" + String(mqttBroker[0])+"."+String(mqttBroker[1])+"."+String(mqttBroker[2])+"."+String(mqttBroker[3]) + "\",";
+  j += "\"mqttPort\":" + String(MQTT_PORT) + ",";
+  j += "\"rotation\":" + String(eInkRotation) + ",";
+  j += "\"negativ\":" + String(eInkNegativ ? "true":"false") + ",";
+  j += "\"units\":"   + String(usUnits ? "true":"false") + ",";
+  j += "\"offline\":" + String(OfflineTimeout) + ",";
+  j += "\"tzHours\":" + String(gmtOffset_sec/3600) + ",";
+  j += "\"dst\":"     + String(daylightOffset_sec!=0 ? "true":"false") + ",";
+  j += "\"ntp\":\""   + jsonEsc(ntpServer) + "\",";
+  j += "\"dispType\":"+ String(dispType) + ",";
+  j += "\"proto\":"   + String(proto) + ",";
+  j += "\"udpPort\":" + String(udpPort) + ",";
+  j += "\"devid\":\"" + jsonEsc(deviceId) + "\",";
+  j += "\"lowpwr\":"  + String(lowPower ? "true":"false") + ",";
+  j += "\"lpint\":"   + String(lpInterval) + ",";
+  j += "\"batcap\":"  + String(batCapacity) + ",";
+  j += "\"vbat\":"    + String(lowPower ? lpBatteryVolts() : 0.0f, 2) + ",";
+  j += "\"days\":"    + String(lpEstimateDays(), 1) + ",";
+  // diagnostics
+  j += "\"rev\":\"" + String(REV) + "\",";
+  j += "\"mac\":\"" + jsonEsc(MACString) + "\",";
+  j += "\"apmode\":" + String(APmode ? "true":"false") + ",";
+  j += "\"ip\":\"" + (APmode ? WiFi.softAPIP().toString() : WiFi.localIP().toString()) + "\",";
+  j += "\"rssi\":" + String(APmode ? 0 : WiFi.RSSI()) + ",";
+  j += "\"heap\":" + String(ESP.getFreeHeap()) + ",";
+  j += "\"fsTotal\":" + String(FsMounted ? SPIFFS.totalBytes() : 0) + ",";
+  j += "\"fsUsed\":"  + String(FsMounted ? SPIFFS.usedBytes()  : 0) + ",";
+  j += "\"trxPeers\":" + String((proto==1 && APmode==false) ? trxNet.peerCount() : 0);
+  j += "}";
+  ajaxserver.sendHeader("Cache-Control", "no-store");
+  ajaxserver.send(200, "application/json", j);
+}
+
+// POST /api/config - persist every provided field to NVS, then reboot to apply.
+void handleApiConfigSave(){
+  prefs.begin(NVS_NS, false);
+  for(int i=0;i<4;i++){
+    String ks = "ssid"+String(i), kp = "pass"+String(i);
+    if(ajaxserver.hasArg(ks)) prefs.putString(ks.c_str(), ajaxserver.arg(ks));
+    if(ajaxserver.hasArg(kp)) prefs.putString(kp.c_str(), ajaxserver.arg(kp));
+  }
+  if(ajaxserver.hasArg("devsel"))   prefs.putInt("devsel", ajaxserver.arg("devsel").toInt());
+  if(ajaxserver.hasArg("topic"))    prefs.putString("topic", ajaxserver.arg("topic"));
+  if(ajaxserver.hasArg("mqttIp")){
+    String s = ajaxserver.arg("mqttIp"); int p = 0;
+    const char* keys[4] = {"mqip0","mqip1","mqip2","mqip3"};
+    for(int k=0;k<4;k++){
+      int dot = s.indexOf('.', p);
+      String part = (dot<0) ? s.substring(p) : s.substring(p, dot);
+      prefs.putUChar(keys[k], (uint8_t)constrain(part.toInt(), 0, 255));
+      if(dot<0) break;
+      p = dot+1;
     }
   }
-  Serial.print("load ");
-  Serial.println(ConfigFile);
+  if(ajaxserver.hasArg("mqttPort")) prefs.putUShort("mqport", (uint16_t)ajaxserver.arg("mqttPort").toInt());
+  if(ajaxserver.hasArg("rotation")) prefs.putUChar("rot", (uint8_t)ajaxserver.arg("rotation").toInt());
+  if(ajaxserver.hasArg("negativ"))  prefs.putBool("neg", ajaxserver.arg("negativ")=="1");
+  if(ajaxserver.hasArg("units"))    prefs.putBool("units", ajaxserver.arg("units")=="1");
+  if(ajaxserver.hasArg("offline"))  prefs.putUChar("offto", (uint8_t)ajaxserver.arg("offline").toInt());
+  if(ajaxserver.hasArg("tzHours"))  prefs.putInt("tzh", ajaxserver.arg("tzHours").toInt());
+  if(ajaxserver.hasArg("dst"))      prefs.putBool("dst", ajaxserver.arg("dst")=="1");
+  if(ajaxserver.hasArg("ntp"))      prefs.putString("ntp", ajaxserver.arg("ntp"));
+  if(ajaxserver.hasArg("dispType")) prefs.putUChar("disp", (uint8_t)ajaxserver.arg("dispType").toInt());
+  if(ajaxserver.hasArg("proto"))    prefs.putUChar("proto", (uint8_t)ajaxserver.arg("proto").toInt());
+  if(ajaxserver.hasArg("udpPort"))  prefs.putUShort("udpport", (uint16_t)ajaxserver.arg("udpPort").toInt());
+  if(ajaxserver.hasArg("devid"))    prefs.putString("devid", ajaxserver.arg("devid"));
+  if(ajaxserver.hasArg("lowpwr"))   prefs.putBool("lowpwr", ajaxserver.arg("lowpwr")=="1");
+  if(ajaxserver.hasArg("lpint"))    prefs.putUShort("lpint", (uint16_t)constrain(ajaxserver.arg("lpint").toInt(), 1, 1440));
+  if(ajaxserver.hasArg("batcap"))   prefs.putUShort("batcap", (uint16_t)constrain(ajaxserver.arg("batcap").toInt(), 0, 65535));
+  prefs.putBool("apmode", false);   // configured -> boot into client mode
+  prefs.end();
 
-  display.fillScreen(colorB);
-  display.setTextColor(colorW);
-  display.setFont(&Logisoso10pt7b);
-  display.setCursor(70, 150);
-  display.println("Connecting");
-  display.setFont(&Logisoso8pt7b);
-  display.setCursor(90, 190);
-  display.println("MicroSD...");
-    display.fillCircle(80, 190-7, 3, colorW);
-  display.setFont(&Logisoso8pt7b);
-  display.setCursor(200, 385);
-  display.print(REV);
-  display.display(false);
-
-  readSDSettings();
+  ajaxserver.send(200, "text/plain", "saved");
+  delay(1500);
+  ESP.restart();
 }
 
-//-------------------------------------------------------------------------------------------------------
-void readSDSettings(){
-  char character;
-  String settingName;
-  settingName.reserve(20);
-  String settingValue;
-  settingValue.reserve(20);
-  myFile = SD.open(charConfigFile);
-  if (myFile){
-    while (myFile.available()){
-    	character = myFile.read();
-    	while((myFile.available()) && (character != '[')){
-    		character = myFile.read();
-    	}
-    	character = myFile.read();
-    	while((myFile.available()) && (character != '=')){
-    		settingName = settingName + character;
-    		character = myFile.read();
-    	}
-    	character = myFile.read();
-    	while((myFile.available()) && (character != ']')){
-    		settingValue = settingValue + character;
-    		character = myFile.read();
-    	}
-    	if(character == ']'){
-
-      Serial.println("   ["+String(settingName)+"="+String(settingValue)+"]");
-
-        if(settingName == "mainHWdeviceSelect"){
-          mainHWdeviceSelect = (int)settingValue.toInt();  //0 = IP rotator, 1 = WX station
-          // Serial.println("   mainHWdeviceSelect="+String(mainHWdeviceSelect));
-          microSDlines++;
-        }else if(settingName == "ROT_TOPIC"){
-          ROT_TOPIC = String(settingValue)+String(mainHWdevice[0][0]);
-          microSDlines++;
-        }else if(settingName == "WX_TOPIC"){
-          WX_TOPIC = String(settingValue)+String(mainHWdevice[1][0]);
-          microSDlines++;
-        }else if(settingName == "mqttBroker0"){
-          mqttBroker[0] = (int)settingValue.toInt();
-          // Serial.println("   mqttBroker0="+String(mqttBroker[0]));
-          microSDlines++;
-        }else if(settingName == "mqttBroker1"){
-          mqttBroker[1] = (int)settingValue.toInt();
-          // Serial.println("   mqttBroker1="+String(mqttBroker[1]));
-          microSDlines++;
-        }else if(settingName == "mqttBroker2"){
-          mqttBroker[2] = (int)settingValue.toInt();
-          // Serial.println("   mqttBroker2="+String(mqttBroker[2]));
-          microSDlines++;
-        }else if(settingName == "mqttBroker3"){
-          mqttBroker[3] = (int)settingValue.toInt();
-          // Serial.println("   mqttBroker3="+String(mqttBroker[3]));
-          mqtt_server_ip = mqttBroker;
-          microSDlines++;
-        }else if(settingName == "MQTT_PORT"){
-          MQTT_PORT = (int)settingValue.toInt();
-          // Serial.println("   MQTT_PORT="+String(MQTT_PORT));
-          microSDlines++;
-        }else if(settingName == "SSID"){
-          SSID = settingValue;
-          // Serial.println("   SSID="+String(SSID));
-          microSDlines++;
-          // char buff[20];
-          // settingValue.toCharArray(buff, 20);
-          // SSID=buff;
-        }else if(settingName == "PSWD"){
-          PSWD = settingValue;
-          // Serial.println("   PSWD=****");
-          microSDlines++;
-          // char buff[20];
-          // settingValue.toCharArray(buff, 20);
-          // PSWD=buff;
-        }else if(settingName == "APRS_FI_NAME"){
-          #if defined(APRSFI)
-            APRS_FI_NAME = settingValue;
-          #endif
-          microSDlines++;
-        }else if(settingName == "APRS_FI_APIKEY"){
-          #if defined(APRSFI)
-            APRS_FI_APIKEY = settingValue;
-          #endif
-          microSDlines++;
-        }else if(settingName == "eInkRotation"){
-          eInkRotation = (unsigned int)settingValue.toInt();
-          display.setRotation(eInkRotation); // 1 USB TOP, 3 USB DOWN | 0 default, 1 90°CW, 2 180°CW, 3 90°CCW
-          // Serial.println("   eInkRotation="+String(eInkRotation));
-          microSDlines++;
-        }else if(settingName == "OfflineTimeout"){
-          OfflineTimeout = (int)settingValue.toInt();
-          // Serial.println("   OfflineTimeout="+String(OfflineTimeout));
-          microSDlines++;
-        }else if(settingName == "eInkNegativ"){
-          eInkNegativ = (bool)settingValue.toInt();
-          if(eInkNegativ==true){
-            colorB = GxEPD_BLACK;
-            colorW = GxEPD_WHITE;
-            eInkNegativTmp=true;
-          }else{
-            colorB = GxEPD_WHITE;
-            colorW = GxEPD_BLACK;
-            eInkNegativTmp=false;
-          }
-          // Serial.println("sd   eInkNegativ="+String(eInkNegativ));
-          // Serial.println("sd   eInkNegativTmp="+String(eInkNegativTmp));
-          microSDlines++;
-        }else if(settingName == "DesignSkin"){
-          DesignSkin = (int)settingValue.toInt();
-          // Serial.println("   DesignSkin="+String(DesignSkin));
-          microSDlines++;
-        }
-        if(mainHWdeviceSelect==0){
-          TOPIC = ROT_TOPIC;
-        }else if(mainHWdeviceSelect==1){
-          TOPIC = WX_TOPIC;
-        }
-    		settingName = "";
-    		settingValue = "";
-    	}
-    } // end while
-    myFile.close();
-    // Serial.println("   ROT_TOPIC="+String(ROT_TOPIC));
-    // Serial.println("   WX_TOPIC="+String(WX_TOPIC));
-    // Serial.println("   TOPIC="+String(TOPIC));
-  }else{
-    // if the file didn't open, print an error:
-    //Serial.println("error opening settings.txt");
+// GET /api/peers - JSON array of TrxNet peer names currently visible on the network.
+// Only populated when booted in TrxNet + STA mode; empty otherwise (e.g. AP setup).
+void handleApiPeers(){
+  String j = "[";
+  if(proto==1 && APmode==false){
+    int n = trxNet.peerCount();
+    for(int i=0;i<n;i++){
+      const TrxPeer* p = trxNet.peer(i);
+      if(!p) continue;
+      if(j.length()>1) j += ",";
+      j += "\"" + jsonEsc(String(p->name)) + "\"";
+    }
   }
-  SD.end();
+  j += "]";
+  ajaxserver.sendHeader("Cache-Control", "no-store");
+  ajaxserver.send(200, "application/json", j);
 }
+
+void handleFactoryReset(){
+  prefs.begin(NVS_NS, false);
+  prefs.clear();
+  prefs.end();
+  ajaxserver.send(200, "text/plain", "erased - rebooting to AP mode");
+  delay(1500);
+  ESP.restart();
+}
+
