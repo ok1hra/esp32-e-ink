@@ -1,6 +1,6 @@
 {
   "name": "ESP32 e-ink",
-  "version": "20260628",
+  "version": "20260703",
   "new_install_prompt_erase": true,
   "builds": [
     {
