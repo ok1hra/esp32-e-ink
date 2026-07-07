@@ -15,9 +15,75 @@
   - **Direct read WX data from aprs.fi** see [setup.cfg](https://github.com/ok1hra/esp32-e-ink/blob/main/setup.cfg)
     
   <img src="https://raw.githubusercontent.com/ok1hra/esp32-e-ink/main/img/wx-station-display.png" height="220">
-- Configured via setup.cfg file on microSD card
-- Powered from USB-C connector
+- Configured via web interface
+- Powered from USB-C connector o battery with sleep mode
 - Customized 3D printed box in OpenScad, without screw. If possible, the supports can be folded out or hung on a peg.
+
+# Firmware modes
+
+One firmware, three ways to use the display. The mode is picked in the web setup under
+**Device type** (`http://192.168.4.1` in AP mode, or the board's IP once on your network):
+
+| Device type | Shows | Data source |
+| --- | --- | --- |
+| **IP rotator** | antenna azimuth (arrow + degrees) | one rotator, single protocol |
+| **WX station** | weather values (temp, wind, …) | one WX station, single protocol |
+| **More sources** | a custom list of values | many rows, MQTT and TrxNet mixed |
+
+## IP rotator
+
+Mirrors **one** rotator and draws its azimuth — the arrow stays on screen even after the
+rotator is switched off (that is the point of the e-ink panel).
+
+**Setup:** *Device type → IP rotator*, then open the **WX or IP rotator source** card and
+choose the **Protocol**:
+- **MQTT** — fill **Topic base** (e.g. `OK1HRA/1`); the firmware appends `/ROT/` itself.
+  The broker IP + port live in the **MQTT broker** card.
+- **TrxNet** — fill **Device ID** (prefix `ROT.`) to select the source to mirror. Use
+  **Devices on network** to scan and pick one. The UDP port is in the **TrxNet** card. This
+  display announces itself as `INK.<MAC>`, so several displays can mirror the same rotator.
+
+## WX station
+
+Mirrors **one** weather station and shows its readings. Identical source card to the
+rotator, except the firmware appends `/WX/` (MQTT) / uses the `WX.` prefix (TrxNet).
+
+**Setup:** *Device type → WX station* → **WX or IP rotator source** card, exactly as above.
+The **US units** checkbox (Display hardware card) switches to °F / in / ft/s. Because the
+weather changes slowly, this mode pairs best with **Low power (battery) mode** below.
+
+## More sources
+
+Shows a **custom list** of values that can mix MQTT and TrxNet on a row-by-row basis — draw
+top-to-bottom, description on the left, right-aligned value with its unit.
+
+**Setup:** *Device type → More sources* → the **More sources** card:
+- **Refresh time** (mm:ss) for the whole list.
+- **+ Add source** for each row. Per row you set: a **description** label, the **protocol**
+  (MQTT or TrxNet), the **topic** (MQTT topic or `WX.01/temp`-style TrxNet path), the value
+  **format**, an optional **numeric transform** (multiply / add / decimal places) and
+  literal **value replacements** (`1 → ON`), plus the **unit** shown after the value.
+- The **MQTT wall** button helps discover live MQTT topics; **Preview display** renders the
+  list as it will appear on the panel. A fit meter warns if the rows exceed the panel height.
+- This display's own TrxNet name is set in the **TrxNet** card (**Own ID**, default
+  `INK.<MAC>`).
+
+## TrxNet priority prefixes
+
+Only relevant in **TrxNet** mode on a **large network**. TrxNet keeps a peer table (24
+slots on the ESP32). Once it is full, newly announced peers are dropped — and because the
+display attributes incoming telemetry by the sender's *name*, which it resolves from that
+table, a dropped source silently stops updating even though its packets still arrive.
+
+**Priority prefixes** (in the **TrxNet** card) list device-name prefixes that must keep a
+slot: when the table is full, a matching peer evicts the stalest *non-priority* peer
+instead of being dropped. Space-separated, prefix-matched — `ROT` covers `ROT.01`,
+`ROT.02`, … Registered via the library's `setPriorityPrefixes()`.
+
+The field is pre-filled from the device type — **ROT** for the rotator, **WX** for the WX
+station, empty for the rest — and that same default is applied by the firmware when the
+field is left blank, so a plain rotator/WX display is protected without any configuration.
+Add more prefixes only if this display must also track other sources on a crowded network.
 
 # Hardware reference (LaskaKit ESPink-42)
 
@@ -67,36 +133,8 @@ its time in **deep sleep (~10 µA)** and only wakes on a fixed interval to refre
   web setup. Best suited to the WX station (weather changes slowly); on the rotator the
   azimuth would only update once per interval.
 
-# Compile and upload
-1.  **Install [Arduino IDE](https://www.arduino.cc/en/software)** rev 1.8.19
-1.  **Install support [for ESP32](https://docs.espressif.com/projects/arduino-esp32/en/latest/installing.html)**
-1.  **Install** these **libraries** in the versions listed
-	* GxEPD2 rev 1.5.2
-	* Adafruit_GFX_Library rev 1.11.3
-	* Adafruit_BusIO rev 1.14.1
-	* Wire rev 2.0.0
-	* SPI rev 2.0.0
-	* WiFi rev 2.0.0
-	* AsyncTCP rev 1.1.1
-	* ESPAsyncWebServer rev 1.2.3
-	* FS rev 2.0.0
-	* AsyncElegantOTA rev 2.2.7
-	* Update rev 2.0.0
-	* PubSubClient rev 2.8
-1. **Select board** 'ESP32 Dev Module'
-1. **Connect** the rotator with a **USB-C** cable and select the corresponding port in the arduino IDE
-1. Now you can **compile and upload** code using USB
 
-## Release a new firmware version
-The web installer is regenerated by [`tools/gh-pages.sh`](tools/gh-pages.sh):
-1. Increase `REV` in [esp32-e-ink.ino](esp32-e-ink.ino).
-2. Arduino IDE *Sketch/Export compiled Binary* (board *ESP32 Dev Module*, Partition Scheme *No OTA (2MB APP/2MB SPIFFS)*) → produces `esp32-e-ink.ino.esp32.bin`.
-3. Build only: `./tools/gh-pages.sh` — or build **and** publish: `./tools/gh-pages.sh --publish` (wipes the `gh-pages` branch, so only the latest firmware ever stays online).
-4. Commit with the Release number and push.
-
-To rebuild only the web UI (no new firmware), edit `data/*` then run `./tools/build_spiffs_image.sh` and flash `build/spiffs.bin` at `0x210000`.
-
-## Picture
+# Picture
 
 <img src="https://raw.githubusercontent.com/ok1hra/esp32-e-ink/main/img/rot6.png" height="200"><img src="https://raw.githubusercontent.com/ok1hra/esp32-e-ink/main/img/light-mode.jpg" height="200">
 

@@ -37,6 +37,11 @@ Email:podpora@laskakit.cz
 Web:laskakit.cz
 
 HARDWARE ESP32 Dev Module - No OTA (2 MB APP/2MB SPIFFS)
+
+- Zvýšit REV
+- Arduino IDE → Export compiled Binary.
+- ./tools/gh-pages.sh --publish.
+
 IDE 1.8.19
 Použití knihovny FS ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/FS
 Použití knihovny SD ve verzi 2.0.0 v adresáři: /home/dan/Arduino/hardware/espressif/esp32/libraries/SD
@@ -72,7 +77,7 @@ Web UI only (no new firmware)
 */
 //-------------------------------------------------------------------------------------------------------
 
-#define REV 20260628
+#define REV 20260707
 #define WIFI
 #define MQTT                      // enable MQTT
 #define WDT         // watchdog timer
@@ -163,6 +168,9 @@ const char* NVS_NS = "eink";
 // https://rop.nl/truetype2gfx/
 #include "Logisoso8pt7b.h"
 #include "Logisoso10pt7b.h"
+#include "Logisoso20pt7b.h"   // "More sources" medium value size
+#include "Logisoso30pt7b.h"   // "More sources" large-ish value size (index 3, added after 40pt)
+#include "Logisoso40pt7b.h"   // "More sources" large value size
 #include "Logisoso50pt7b.h"
 // gfx->setFont(&Logisoso250pt7b);
 uint16_t colorB = GxEPD_BLACK;
@@ -185,6 +193,7 @@ String ROT_TOPIC = "";    // mainHWdevice[mainHWdeviceSelect][0]
 String WX_TOPIC = "";    // mainHWdevice[mainHWdeviceSelect][0]
 byte mqttBroker[4]={0,0,0,0}; // MQTT broker IP address
 int MQTT_PORT = 0;         // MQTT broker port
+#define WALL_WS_PORT 1884  // broker WebSocket port for the MQTT wall page (must have a WS listener)
 IPAddress mqtt_server_ip(mqttBroker[0], mqttBroker[1], mqttBroker[2], mqttBroker[3]);       // MQTT broker IP address
 String SSID = "";   // active connection (the network we joined this boot)
 String PSWD = "";
@@ -292,12 +301,60 @@ uint16_t udpPort    = 5683;  // TrxNet UDP/CoAP port  (NVS "udpport")
 String   deviceId   = "";    // numeric ID only, e.g. "01"  (NVS "devid")
 String   trxSource  = "";    // peer we mirror, e.g. "WX.01" (configured, or auto-picked at runtime)
 String   trxOwnName = "";    // our own TrxNet name, e.g. "INK.01" (or INK.<MAC> when no devid)
+// Priority prefixes: peers whose name starts with one of these keep a slot when the peer
+// table (TRXNET_MAX_PEERS) fills on a busy network — they evict the stalest non-priority
+// peer instead of being dropped. This matters even though we only subscribe: a dropped
+// sender has no peer entry, so its name can't be resolved (TrxNet.cpp) and its telemetry
+// stops matching a source row. Space-separated (e.g. "ROT WX"); empty -> derived from the
+// device type in trxBegin() (ROT rotator -> "ROT", WX station -> "WX", others -> none).
+String   prioPrefixRaw = "";        // NVS "prioPfx"
+#define  PRIO_MAX 6
+static char        prioStore[PRIO_MAX][TRXNET_MAX_DEVICE_NAME];  // stable storage the library keeps referencing
+static const char* prioPtr[PRIO_MAX];                            // pointer array handed to setPriorityPrefixes()
 // --- runtime source auto-select (never persisted to NVS) ---
 String   trxCfgSource = "";  // the configured source to honour/reclaim ("" = none configured -> pure auto)
 int      trxCfgSelect = 1;   // configured device type (layout) to prefer when auto-picking
 bool     trxAutoPicked= false;// true when trxSource came from the network scan, not from config
 int      trxCurSelect = -1;  // device type currently subscribed (-1 = nothing subscribed yet)
 uint32_t trxStartMs   = 0;   // millis() at trxBegin(), for the configured-source grace window
+
+// ---- More sources (devsel==3): user-defined list of label/value rows ----
+// A variable-length list configured in setup ("More sources" tab) and persisted to NVS as one
+// RS/US-encoded string ("srcCfg"). Each row mirrors one value from MQTT (text payload) or TrxNet
+// (raw bytes decoded per the row's format). Both network stacks run at once in this mode.
+#define SRC_MAX 12
+struct Source {
+  String  label;        // left description; may contain '\n' for multiple lines
+  uint8_t proto;        // 0 = MQTT, 1 = TrxNet
+  String  topic;        // MQTT: full path  |  TrxNet: "DEV.ID/path" (e.g. WX.01/temp)
+  uint8_t format;       // TrxNet decode: 0 int16/100, 1 int16, 2 uint16, 3 int32, 4 float, 5 ASCII, 6 uint8, 7 int8, 8 uint32
+  uint8_t decimals;     // displayed decimal places (0-2); rounds the numeric transform (and TrxNet decode)
+  uint8_t size;         // value font: 0=10pt 1=20pt 2=40pt
+  String  suffix;       // unit chars drawn after the value (same size), e.g. "°C"
+  bool    refreshAfter; // refresh the display immediately on a new value (before the global interval)
+  // ---- display formatting (applyFormat), all optional / backward compatible ----
+  bool    numeric;      // apply the numeric transform: extract number, y = x*mul + add, round to decimals
+  float   mul;          // numeric gain   (default 1)
+  float   add;          // numeric offset (default 0)
+  String  thousands;    // thousands-group separator inserted every 3 integer digits ("" = off), e.g. "."
+  String  decsep;       // decimal separator replacing "." ("" = keep "."), e.g. "," -> 123.456,78
+  String  replaceMap;   // literal from->to pairs: "from"\x1c"to", pairs joined by \x1d (no regex)
+  String  rawText;      // last raw MQTT payload (unformatted) - kept so live preview can re-format
+  String  value;        // last received/decoded value as text (after applyFormat)
+  bool    haveValue;    // a value has arrived at least once
+  uint8_t rawBuf[8];    // last raw TrxNet payload (for live re-decode in the setup preview)
+  uint8_t rawLen;
+};
+Source   sources[SRC_MAX];
+int      sourceCount = 0;
+String   srcCfgRaw = "";          // raw NVS string (RS/US encoded)
+uint16_t srcRefreshSec = 60;      // global refresh interval in seconds (NVS "srcRefr", UI mm:ss)
+bool     srcUseMqtt = false;      // any MQTT row present -> start MQTT stack in devsel==3
+bool     srcUseTrx  = false;      // any TrxNet row present -> start TrxNet stack in devsel==3
+unsigned long srcRefreshTimer = 0;// millis() of last forced periodic refresh
+// TrxNet callbacks carry no path, so each subscribed path gets its own trampoline slot.
+String   srcTrxSubPath[8];        // path subscribed in slot i (e.g. "/temp")
+int      srcTrxSubCount = 0;
 
 // ---- Low power (battery) mode ----------------------------------------------------------------------
 // Fixed-interval deep sleep + pull-latest-on-wake. The e-ink image is bistable so it stays visible
@@ -364,6 +421,7 @@ bool streamSpiffsFile(const String& path);
 String webContentType(const String& path);
 String jsonEsc(const String& s);
 void trxBegin();
+String footerId();
 void TrxLoop();
 void recomputeDewPoint();
 void handleApiPeers();
@@ -379,6 +437,18 @@ void lowPowerManage();
 void lpDrawBattery();
 uint32_t lpWxHash();
 float lpEstimateDays();
+// "More sources" (devsel==3)
+void parseSources();
+String decodeTrx(uint8_t fmt, const uint8_t* d, size_t l, uint8_t decimals = 2);
+void srcMark(bool immediate);
+void handleTrxSource(int slot, const char* from, const uint8_t* d, size_t l);
+void srcTrxSubscribe();
+void drawSourcesScreen();
+const GFXfont* srcValueFont(uint8_t size);
+int srcValueHeight(uint8_t size);
+int srcCountLines(const String& s);
+void handleApiSrcPreview();
+void handleApiWallCfg();
 
 //-------------------------------------------------------------------------------------------------------
 void setup(void){
@@ -430,6 +500,8 @@ void setup(void){
   ajaxserver.on("/api/config", HTTP_GET, handleApiConfig);
   ajaxserver.on("/api/config", HTTP_POST, handleApiConfigSave);
   ajaxserver.on("/api/peers", HTTP_GET, handleApiPeers);
+  ajaxserver.on("/api/srcpreview", HTTP_GET, handleApiSrcPreview);
+  ajaxserver.on("/api/wallcfg", HTTP_GET, handleApiWallCfg);
   ajaxserver.on("/factoryreset", HTTP_POST, handleFactoryReset);
   ajaxserver.onNotFound(handleStatic);   // static SPIFFS files (gzip-aware) + captive-portal catch-all
 
@@ -483,7 +555,7 @@ void setup(void){
         // if (mqttClient.connect("esp32gwClient", MQTT_USER, MQTT_PASS)){
           //   AfterMQTTconnect();
           // }
-        }else if(proto==0 && (mainHWdeviceSelect==0 || mainHWdeviceSelect==1)){
+        }else if( (proto==0 && (mainHWdeviceSelect==0 || mainHWdeviceSelect==1)) || (mainHWdeviceSelect==3 && srcUseMqtt && mqttBroker[0]!=0) ){
             mqtt_server_ip = IPAddress(mqttBroker[0], mqttBroker[1], mqttBroker[2], mqttBroker[3]);       // MQTT broker IP address (set global)
             mqttClient.setServer(mqtt_server_ip, MQTT_PORT);
             Serial.print("MQTT| Connect to ");
@@ -502,7 +574,11 @@ void setup(void){
         }
       // }
     #endif
-    if(proto==1){ trxBegin(); if(!(lowPower && timerWake)) drawTrxWaiting(); }   // start TrxNet; skip splash on a low-power timer wake (keep retained image)
+    if(proto==1 || (mainHWdeviceSelect==3 && srcUseTrx)){   // start TrxNet; skip splash on a low-power timer wake (keep retained image)
+      trxBegin();
+      if(!(lowPower && timerWake) && mainHWdeviceSelect!=3) drawTrxWaiting();
+    }
+    if(mainHWdeviceSelect==3){ srcRefreshTimer=millis(); eInkNeedRefresh=true; }  // draw the first (possibly empty) frame
     Serial.println("AP-MODE OFF");
     Serial.println("");
     Serial.print("WIFI connected with IP ");
@@ -583,6 +659,11 @@ void loop(void) {
     Watchdog();
     Mqtt();
     TrxLoop();
+    // More sources: force a periodic full refresh even without new data (global Refresh time)
+    if(mainHWdeviceSelect==3 && srcRefreshSec>0 && millis()-srcRefreshTimer > (unsigned long)srcRefreshSec*1000UL){
+      srcRefreshTimer = millis();
+      eInkNeedRefresh = true;
+    }
     eInkRefresh();
     ajaxserver.handleClient();
     lowPowerManage();   // low-power: end the awake window and deep sleep when done
@@ -688,7 +769,7 @@ void eInkRefresh(){
       gfx->println(Name);
       gfx->setFont(&Logisoso8pt7b);
       gfx->setCursor(15, 360+ZZshift);
-      gfx->println(String(TOPIC)+"#");
+      gfx->println(footerId());
       gfx->setCursor(15, 385);
       UtcTime(1).toCharArray(buf, 21);
       gfx->println("UTC "+String(buf));
@@ -750,7 +831,7 @@ void eInkRefresh(){
         gfx->println(usUnits ? "F" : "C");
         gfx->fillCircle(230, 25, 6, colorW);
 
-        gfx->drawLine(15, 100, 285, 100, 2);
+        gfx->drawLine(15, 100, 285, 100, colorW);
         float XX = (285.0-15.0)/100.0*HumidityRel+15.0;
         gfx->fillCircle((int)XX, 100, 3, colorW);
 
@@ -771,7 +852,7 @@ void eInkRefresh(){
         gfx->setFont(&Logisoso10pt7b);
         gfx->print(String((int)Pressure)+" hpa");
         Triangle(Pressure, 983.0, 1043.0);  // 1013 +-30
-        gfx->drawLine(15, 200, 20, 200, 2);
+        gfx->drawLine(15, 200, 20, 200, colorW);
 
         if(dispRainToday>0){
           str = String(dispRainToday);
@@ -823,7 +904,7 @@ void eInkRefresh(){
         gfx->setFont(&Logisoso8pt7b);
         gfx->setCursor(15, 360+ZZshift);
         if(mainHWdeviceSelect==1){
-          gfx->println(String(TOPIC)+"#");
+          gfx->println(footerId());
         }else if(mainHWdeviceSelect==2){
           gfx->println(String(mainHWdevice[mainHWdeviceSelect][1])+"/"+String(APRS_FI_NAME));
         }
@@ -845,6 +926,12 @@ void eInkRefresh(){
         eInkRefreshTimer=millis();
         lpDataHandled=true;
         if(lowPower) rtcShownHash = lpWxHash();   // seed/refresh suppression baseline (incl. cold boot)
+    // More sources
+    }else if( mainHWdeviceSelect==3 && eInkNeedRefresh==true && (millis()-eInkRefreshTimer > 3000 || lpWake) ){
+        drawSourcesScreen();
+        eInkNeedRefresh=false;
+        eInkRefreshTimer=millis();
+        lpDataHandled=true;
   }
 }
 //------------------------------------------------------------------------------
@@ -1112,7 +1199,7 @@ void print_wifi_error(){
 //-------------------------------------------------------------------------------------------------------
 void Mqtt(){
   #if defined(MQTT)
-    if (proto==0 && millis()-MqttStatusTimer[0]>MqttStatusTimer[1] && (mainHWdeviceSelect==0 || mainHWdeviceSelect==1)){
+    if ( millis()-MqttStatusTimer[0]>MqttStatusTimer[1] && ((proto==0 && (mainHWdeviceSelect==0 || mainHWdeviceSelect==1)) || (mainHWdeviceSelect==3 && srcUseMqtt)) ){
       if(!mqttClient.connected()){
         long now = millis();
         if (now - lastMqttReconnectAttempt > 10000) {
@@ -1141,6 +1228,17 @@ bool mqttReconnect() {
     WiFi.macAddress().toCharArray(charbuf, 18);
     if (mqttClient.connect(charbuf)) {
       Serial.println("mqttReconnect-connected");
+
+      // More sources: subscribe each MQTT row's topic, then we are done (no ROT/WX topics, no splash)
+      if(mainHWdeviceSelect==3){
+        for(int i=0;i<sourceCount;i++){
+          if(sources[i].proto!=0 || sources[i].topic.length()==0) continue;
+          if(mqttClient.subscribe(sources[i].topic.c_str())){
+            Serial.println("mqttReconnect-subscribe "+sources[i].topic);
+          }
+        }
+        return mqttClient.connected();
+      }
 
       String topic = String(ROT_TOPIC) + "mainHWdeviceSelect";
       topic.reserve(50);
@@ -1348,6 +1446,22 @@ void MqttRx(char *topic, byte *payload, unsigned int length) {
     // static bool HeardBeatStatus;
     Serial.print("RXmqtt < ");
 
+    // More sources: store the raw text payload into every matching row
+    if(mainHWdeviceSelect==3){
+      String tp = String(topic);
+      String pv = ""; for(unsigned int i=0;i<length;i++) pv += (char)p[i];
+      Serial.println(tp+" = "+pv);
+      for(int i=0;i<sourceCount;i++){
+        if(sources[i].proto!=0 || sources[i].topic!=tp) continue;
+        sources[i].rawText = pv;                          // keep raw for live re-format in preview
+        sources[i].value = applyFormat(sources[i], pv);
+        sources[i].haveValue = true;
+        srcMark(sources[i].refreshAfter);
+      }
+      free(p);
+      return;
+    }
+
     CheckTopicBase = String(TOPIC) + "mainHWdeviceSelect";
     if ( CheckTopicBase.equals( String(topic) )){
       // int intBuf=(int)payloadToFloat(payload, length);
@@ -1525,6 +1639,328 @@ static void trxMark(){          // mirror what MqttRx does on every accepted mes
   eInkNeedRefresh = true;
 }
 
+// ---- "More sources" (devsel==3) runtime --------------------------------------------------------------
+// Mark a new value: reset the offline watchdog like trxMark, but only force a redraw when the row
+// asked for it ("Refresh after receive"); otherwise the global srcRefreshSec timer repaints later.
+void srcMark(bool immediate){
+  RxMqttTimer = millis();
+  WDTimer();
+  if(immediate) eInkNeedRefresh = true;
+}
+
+// Decode a raw TrxNet payload to display text per the row's format.
+String decodeTrx(uint8_t fmt, const uint8_t* d, size_t l, uint8_t decimals){
+  if(decimals > 2) decimals = 2;
+  switch(fmt){
+    case 0: if(l<2) return "?"; return String(trxRd16(d)/100.0f, (int)decimals); // int16 / 100
+    case 1: if(l<2) return "?"; return String(trxRd16(d));             // int16
+    case 2: if(l<2) return "?"; return String(trxRdU16(d));            // uint16
+    case 3: { if(l<4) return "?"; int32_t v; memcpy(&v,d,4); return String(v); }
+    case 4: { if(l<4) return "?"; float v;   memcpy(&v,d,4); return String(v,(int)decimals); }
+    case 5: { String s; for(size_t i=0;i<l;i++) s += (char)d[i]; return s; } // ASCII text
+    case 6: if(l<1) return "?"; return String((unsigned)d[0]);        // uint8 (byte, e.g. CI-V mode)
+    case 7: if(l<1) return "?"; return String((int)(int8_t)d[0]);     // int8
+    case 8: { if(l<4) return "?"; uint32_t v; memcpy(&v,d,4); return String((unsigned long)v); } // uint32 (e.g. /hz)
+  }
+  return "?";
+}
+
+// Group the integer part of a plain numeric string ("123456.78") in threes with `sep`, and
+// swap the decimal "." for `dsep` if given -> e.g. sep="." dsep="," yields "123.456,78".
+static String groupThousands(const String& num, const String& sep, const String& dsep){
+  int dot = num.indexOf('.');
+  String ip = (dot < 0) ? num : num.substring(0, dot);      // integer part
+  String fp = (dot < 0) ? ""  : num.substring(dot);         // ".78" (leading dot kept)
+  bool neg = ip.startsWith("-");
+  if(neg) ip = ip.substring(1);
+  if(sep.length() && ip.length() > 3){
+    String g; int c = 0;
+    for(int i = ip.length()-1; i >= 0; i--){
+      g = String((char)ip[i]) + g;
+      if(++c % 3 == 0 && i > 0) g = sep + g;
+    }
+    ip = g;
+  }
+  if(dsep.length() && fp.length()) fp = dsep + fp.substring(1);   // replace leading "." with dsep
+  return (neg ? String("-") : String("")) + ip + fp;
+}
+
+// Apply the per-row display formatting to a decoded/received text value.
+//  numeric on : extract the leading number (toFloat ignores any trailing unit text),
+//               apply the affine transform y = x*mul + add, round to `decimals`, then
+//               optionally group thousands / swap the decimal separator.
+//  numeric off: pass the text through unchanged.
+//  Finally run the literal replace table (from \x1c to, pairs joined by \x1d) via
+//  String::replace() - covers bool/enum mapping and sed-s/// (literal). No regex engine
+//  on purpose: std::regex would cost tens of kB flash + a lot of RAM on the ESP32.
+String applyFormat(const Source& o, const String& raw){
+  String out = raw;
+  if(o.numeric){
+    float x = raw.toFloat();                    // leading number; ignores trailing unit chars
+    float y = x * o.mul + o.add;
+    out = String(y, (int)(o.decimals > 2 ? 2 : o.decimals));
+    if(o.thousands.length() || o.decsep.length()) out = groupThousands(out, o.thousands, o.decsep);
+  }
+  if(o.replaceMap.length()){
+    const char GS = (char)0x1d, FS = (char)0x1c;   // pair separator / from-to separator
+    int start = 0;
+    while(start <= (int)o.replaceMap.length()){
+      int gs = o.replaceMap.indexOf(GS, start);
+      String pair = (gs<0) ? o.replaceMap.substring(start) : o.replaceMap.substring(start, gs);
+      int fs = pair.indexOf(FS);
+      if(fs >= 0){
+        String from = pair.substring(0, fs);
+        if(from.length()) out.replace(from, pair.substring(fs + 1));
+      }
+      if(gs < 0) break;
+      start = gs + 1;
+    }
+  }
+  return out;
+}
+
+// Parse the RS/US-encoded NVS string into sources[]. Fields per row (US-separated):
+//   label | proto | topic | format | size | suffix | refreshAfter | decimals | numeric | mul | add
+//         | replaceMap | thousands | decsep
+// Fields were appended over time (decimals=7, numeric/mul/add/replaceMap=8..11, thousands/decsep=12..13);
+// rows from older configs omit trailing fields and fall back to their prior defaults.
+// Rows are RS-separated. label may carry embedded '\n' (no collision with RS=0x1e/US=0x1f).
+void parseSources(){
+  sourceCount = 0;
+  srcUseMqtt = false; srcUseTrx = false;
+  const char RS = (char)0x1e, US = (char)0x1f;
+  int start = 0;
+  while(start <= (int)srcCfgRaw.length() && sourceCount < SRC_MAX){
+    int rs = srcCfgRaw.indexOf(RS, start);
+    String rec = (rs<0) ? srcCfgRaw.substring(start) : srcCfgRaw.substring(start, rs);
+    if(rec.length() > 0){
+      String f[14]; int fi = 0, p = 0;
+      while(fi < 14){
+        int us = rec.indexOf(US, p);
+        f[fi++] = (us<0) ? rec.substring(p) : rec.substring(p, us);
+        if(us<0) break;
+        p = us + 1;
+      }
+      Source& o = sources[sourceCount];
+      o.label        = f[0];
+      o.proto        = (uint8_t)f[1].toInt();
+      o.topic        = f[2];
+      o.format       = (uint8_t)f[3].toInt();
+      o.size         = (uint8_t)constrain(f[4].toInt(), 0, 3);
+      o.suffix       = f[5];
+      o.refreshAfter = (f[6] == "1");
+      o.decimals     = (uint8_t)(f[7].length() ? constrain(f[7].toInt(), 0, 2) : 2);  // absent (old cfg) -> 2 (prior behavior)
+      o.numeric      = (f[8] == "1");
+      o.mul          = f[9].length()  ? f[9].toFloat()  : 1.0f;  // absent -> identity
+      o.add          = f[10].length() ? f[10].toFloat() : 0.0f;
+      o.replaceMap   = f[11];
+      o.thousands    = f[12];
+      o.decsep       = f[13];
+      o.value = ""; o.rawText = ""; o.haveValue = false; o.rawLen = 0;
+      if(o.proto == 0) srcUseMqtt = true; else srcUseTrx = true;
+      sourceCount++;
+    }
+    if(rs < 0) break;
+    start = rs + 1;
+  }
+  Serial.println("SRC| parsed "+String(sourceCount)+" source(s) mqtt="+String(srcUseMqtt)+" trx="+String(srcUseTrx));
+}
+
+// Store a freshly received TrxNet value into every row that matches this slot's path + sender.
+void handleTrxSource(int slot, const char* from, const uint8_t* d, size_t l){
+  if(slot < 0 || slot >= srcTrxSubCount) return;
+  const String& path = srcTrxSubPath[slot];
+  for(int i=0;i<sourceCount;i++){
+    Source& o = sources[i];
+    if(o.proto != 1) continue;
+    int sl = o.topic.indexOf('/');
+    if(sl < 0) continue;
+    if(o.topic.substring(sl) != path) continue;        // path part "/temp"
+    if(o.topic.substring(0, sl) != String(from)) continue;  // device part "WX.01"
+    o.rawLen = (uint8_t)(l > sizeof(o.rawBuf) ? sizeof(o.rawBuf) : l);
+    memcpy(o.rawBuf, d, o.rawLen);
+    o.value = applyFormat(o, decodeTrx(o.format, d, l, o.decimals));
+    o.haveValue = true;
+    srcMark(o.refreshAfter);
+  }
+}
+// Eight fixed trampolines so each TrxNet path maps to a distinct callback (path index baked in).
+static void srcTrx0(const char* f,const uint8_t* d,size_t l){ handleTrxSource(0,f,d,l); }
+static void srcTrx1(const char* f,const uint8_t* d,size_t l){ handleTrxSource(1,f,d,l); }
+static void srcTrx2(const char* f,const uint8_t* d,size_t l){ handleTrxSource(2,f,d,l); }
+static void srcTrx3(const char* f,const uint8_t* d,size_t l){ handleTrxSource(3,f,d,l); }
+static void srcTrx4(const char* f,const uint8_t* d,size_t l){ handleTrxSource(4,f,d,l); }
+static void srcTrx5(const char* f,const uint8_t* d,size_t l){ handleTrxSource(5,f,d,l); }
+static void srcTrx6(const char* f,const uint8_t* d,size_t l){ handleTrxSource(6,f,d,l); }
+static void srcTrx7(const char* f,const uint8_t* d,size_t l){ handleTrxSource(7,f,d,l); }
+static TrxNetCallback srcTrxCbs[8] = { srcTrx0,srcTrx1,srcTrx2,srcTrx3,srcTrx4,srcTrx5,srcTrx6,srcTrx7 };
+
+// Subscribe each unique TrxNet path (capped at 8 / TRXNET_MAX_SUBS) to its trampoline.
+void srcTrxSubscribe(){
+  srcTrxSubCount = 0;
+  for(int i=0;i<sourceCount && srcTrxSubCount<8;i++){
+    if(sources[i].proto != 1) continue;
+    int sl = sources[i].topic.indexOf('/');
+    if(sl < 0) continue;
+    String pth = sources[i].topic.substring(sl);
+    bool dup = false;
+    for(int k=0;k<srcTrxSubCount;k++) if(srcTrxSubPath[k] == pth){ dup = true; break; }
+    if(dup) continue;
+    srcTrxSubPath[srcTrxSubCount] = pth;
+    trxNet.subscribe(pth.c_str(), srcTrxCbs[srcTrxSubCount]);
+    srcTrxSubCount++;
+  }
+  Serial.println("SRC| TrxNet subscribed "+String(srcTrxSubCount)+" path(s)");
+}
+
+// ---- "More sources" drawing --------------------------------------------------------------------------
+// Value-size index: 0=10pt 1=20pt 2=40pt 3=30pt. 30pt was appended as index 3 to keep
+// older saved configs (which used 0/1/2) rendering at their original sizes.
+const GFXfont* srcValueFont(uint8_t size){
+  if(size == 3) return &Logisoso30pt7b;
+  if(size == 2) return &Logisoso40pt7b;
+  if(size == 1) return &Logisoso20pt7b;
+  return &Logisoso10pt7b;
+}
+int srcValueHeight(uint8_t size){   // approx glyph box height for fit/layout (px)
+  if(size == 3) return 43;
+  if(size == 2) return 56;
+  if(size == 1) return 30;
+  return 18;
+}
+int srcCountLines(const String& s){
+  int lines = 1;
+  for(unsigned i=0;i<s.length();i++) if(s[i]=='\n') lines++;
+  return lines;
+}
+// Left description: smallest font, left-aligned, lines stacked, block vertically centered in the row.
+static void drawSourceLabel(const String& label, int x, int yTop, int rh){
+  gfx->setFont(&Logisoso8pt7b);
+  const int lineH = 17;
+  int lines = srcCountLines(label);
+  int y0 = yTop + (rh - lines*lineH)/2 + 13;   // +ascent so the first baseline sits below the top
+  int start = 0, li = 0;
+  while(start <= (int)label.length()){
+    int nl = label.indexOf('\n', start);
+    String line = (nl<0) ? label.substring(start) : label.substring(start, nl);
+    gfx->setCursor(x, y0 + li*lineH);
+    gfx->print(line);
+    if(nl<0) break;
+    start = nl + 1; li++;
+  }
+}
+// True at a UTF-8 degree sign (U+00B0 = 0xC2 0xB0), which the Logisoso fonts don't contain.
+static bool isDegreeAt(const String& s, unsigned i){
+  return (uint8_t)s[i]==0xC2 && i+1 < s.length() && (uint8_t)s[i+1]==0xB0;
+}
+// Value (+suffix): chosen font, right-aligned against xRight, vertically centered in the row.
+// The font has no "°" glyph, so any degree sign in the suffix is drawn as a geometric ring
+// scaled to the font's cap height and placed like a superscript.
+static void drawSourceValue(Source& o, int xRight, int yTop, int rh){
+  gfx->setFont(srcValueFont(o.size));
+  String full = (o.haveValue ? o.value : String("--")) + o.suffix;
+  int16_t bx, by; uint16_t bw, bh;
+
+  // Cap height from a digit → ring radius, stroke, and reserved advance per degree sign.
+  gfx->getTextBounds("0", 0, 0, &bx, &by, &bw, &bh);
+  int capH = bh;
+  int degR = (int)(capH * 0.12f + 0.5f); if(degR < 2) degR = 2;   // ~1/4 smaller
+  int degStroke = capH/11; if(degStroke < 2) degStroke = 2;       // 2x thicker ring
+  if(degStroke > degR-1) degStroke = degR-1;                      // keep a hole
+  int degW = 3*degR;                       // reserved horizontal space: gap + ring + gap
+
+  // Split into text segments around the degree marks; the box excludes the (missing) "°".
+  const int MAXSEG = 8; String seg[MAXSEG]; int nseg = 0, nDeg = 0;
+  { String cur = "";
+    for(unsigned i=0;i<full.length();i++){
+      if(isDegreeAt(full,i)){ if(nseg<MAXSEG) seg[nseg++]=cur; cur=""; nDeg++; i++; }
+      else cur += full[i];
+    }
+    if(nseg<MAXSEG) seg[nseg++]=cur;
+  }
+
+  // Total advance = printable text widths + one reserved slot per degree sign.
+  int totalW = nDeg*degW;
+  for(int i=0;i<nseg;i++) if(seg[i].length()){
+    gfx->getTextBounds(seg[i], 0, 0, &bx, &by, &bw, &bh); totalW += bx + bw;
+  }
+
+  // Vertical placement from the whole (degree-free) string, as before.
+  gfx->getTextBounds(full, 0, 0, &bx, &by, &bw, &bh);
+  int cy = yTop + (rh - (int)bh)/2 - by;   // baseline
+  int capTop = cy + by;                    // top of the glyph box (by is negative)
+
+  int x = xRight - totalW;                 // right-aligned start
+  for(int i=0;i<nseg;i++){
+    if(seg[i].length()){
+      gfx->setCursor(x, cy); gfx->print(seg[i]);
+      gfx->getTextBounds(seg[i], 0, 0, &bx, &by, &bw, &bh); x += bx + bw;
+    }
+    if(i < nseg-1){                        // a degree mark follows this segment
+      int rcx = x + degR + degR/2, rcy = capTop + degR;
+      gfx->fillCircle(rcx, rcy, degR, colorW);
+      gfx->fillCircle(rcx, rcy, degR - degStroke, colorB);   // hollow it out → ring
+      x += degW;
+    }
+  }
+}
+// Bottom status row: IP, last refresh time, and (in low-power) battery voltage / offline marker.
+static void drawSourceStatus(int W, int H){
+  gfx->drawLine(15, H - 22, W - 15, H - 22, colorW);   // separator above the status row
+  gfx->setFont(&Logisoso8pt7b);
+  gfx->setTextColor(colorW);
+  String s = WiFi.localIP().toString() + " | " + UtcTime(1);   // date + time
+  if(lowPower && lpVbat > 2.5f) s += " | " + String(lpVbat, 2) + "V";
+  if(eInkOfflineDetect)         s += " | OFF>" + String(OfflineTimeout) + "m";
+  gfx->setCursor(15, H - 6);
+  gfx->print(s);
+}
+void drawSourcesScreen(){
+  int W = gfx->width(), H = gfx->height();
+  gfx->fillScreen(colorB);
+  gfx->setTextColor(colorW);
+
+  const int leftM = 15, rightM = 15, topM = 6, statusH = 24;
+  int n = sourceCount;
+  if(n <= 0){
+    gfx->setFont(&Logisoso10pt7b);
+    gfx->setCursor(20, H/2);
+    gfx->print("No sources configured");
+    drawSourceStatus(W, H);
+    gfx->display(false);
+    return;
+  }
+  if(n > SRC_MAX) n = SRC_MAX;
+
+  // Row heights from the taller of value font vs. stacked label lines.
+  int rowH[SRC_MAX]; int totalRows = 0;
+  for(int i=0;i<n;i++){
+    int vH = srcValueHeight(sources[i].size);
+    int lH = srcCountLines(sources[i].label) * 17;
+    rowH[i] = (vH > lH) ? vH : lH;
+    totalRows += rowH[i];
+  }
+  // Spread leftover space as n+1 equal gaps (above each row + below the last), evenly down the panel.
+  int avail = H - statusH - topM;
+  int gap = (avail - totalRows) / (n + 1);
+  if(gap < 0) gap = 0;
+
+  int y = topM + gap;
+  for(int i=0;i<n;i++){
+    drawSourceLabel(sources[i].label, leftM, y, rowH[i]);
+    drawSourceValue(sources[i], W - rightM, y, rowH[i]);
+    y += rowH[i];
+    if(i < n-1){                                   // 1px separator centered in the gap
+      int ly = y + gap/2;
+      gfx->drawLine(leftM, ly, W - rightM, ly, colorW);
+      y += gap;
+    }
+  }
+  drawSourceStatus(W, H);
+  lpDrawBattery();
+  gfx->display(false);
+}
+
 void onTrxTemp(const char* from, const uint8_t* d, size_t l){
   if(!trxFromSource(from) || l<2) return;
   Temperature = trxRd16(d)/100.0f;  recomputeDewPoint();
@@ -1591,6 +2027,7 @@ void onTrxPeer(const TrxPeer* p){   // discovery diagnostics on Serial
 // type switch by the auto-select logic.
 void trxSubscribeFor(int type){
   if(type == trxCurSelect) return;
+  if(type == 3){ srcTrxSubscribe(); trxCurSelect = type; return; }  // More sources: per-row paths
   trxNet.unsubscribe("/azimuth");
   trxNet.unsubscribe("/temp");    trxNet.unsubscribe("/hum");
   trxNet.unsubscribe("/press");   trxNet.unsubscribe("/rain");
@@ -1610,23 +2047,70 @@ void trxSubscribeFor(int type){
   trxCurSelect = type;
 }
 
+// Parse the configured (or device-type-default) priority prefixes into stable storage and
+// register them with the library. Called from trxBegin() before begin(). Space-separated;
+// empty input falls back to the mirrored source's type so ROT/WX displays are protected
+// out of the box (other types get none — a busy network can't starve a single source they
+// don't have). Capped at PRIO_MAX tokens / TRXNET_MAX_DEVICE_NAME chars each.
+void trxApplyPriorityPrefixes(){
+  String s = prioPrefixRaw; s.trim();
+  if(s.length()==0){                          // empty -> default per device type
+    if(mainHWdeviceSelect==0)      s = "ROT";
+    else if(mainHWdeviceSelect==1) s = "WX";
+  }
+  uint8_t n = 0;
+  int i = 0, len = s.length();
+  while(i < len && n < PRIO_MAX){
+    while(i < len && s[i]==' ') i++;          // skip leading spaces
+    int j = i;
+    while(j < len && s[j]!=' ') j++;          // to end of token
+    if(j > i){
+      String tok = s.substring(i, j);
+      strncpy(prioStore[n], tok.c_str(), TRXNET_MAX_DEVICE_NAME-1);
+      prioStore[n][TRXNET_MAX_DEVICE_NAME-1] = '\0';
+      prioPtr[n] = prioStore[n];
+      n++;
+    }
+    i = j;
+  }
+#if TRXNET_VERSION >= 0x0104
+  trxNet.setPriorityPrefixes(n ? prioPtr : nullptr, n);
+#endif
+  Serial.println("TRX | priority prefixes: "+String(n)+(n? " ("+s+")":""));
+}
+
 void trxBegin(){
-  // Own identity: INK.<devid>, or a MAC-derived fallback so a zero-config unit still
-  // has a unique name to be greeted/CON-ACKed and matched on PROBE-reconnect.
-  if(deviceId.length()>0){
+  // Own identity: INK.<devid> only in "More sources" mode (devsel==3), where devid IS
+  // this display's chosen name. In ROT/WX mode devid selects the *source* to mirror
+  // (e.g. WX.01), NOT this display's name -> deriving the name from it would make two
+  // displays mirroring the same source collide (same name -> merged into one peer on
+  // the WX, one steals the other's updates). So ROT/WX always uses the MAC-derived name.
+  // The fallback uses the last 2 MAC bytes (INK.<4 hex>): ~1:65k collision between units.
+  if(mainHWdeviceSelect==3 && deviceId.length()>0){
     trxOwnName = "INK." + deviceId;
   }else{
     uint8_t mac[6]; WiFi.macAddress(mac);
-    char b[4]; sprintf(b, "%02X", mac[5]);
+    char b[8]; sprintf(b, "%02X%02X", mac[4], mac[5]);
     trxOwnName = "INK." + String(b);
   }
   trxNet.setPort(udpPort);
   trxNet.onPeerAdded(onTrxPeer);
+  trxApplyPriorityPrefixes();            // protect mirrored sources from peer-table eviction
   trxNet.begin(trxOwnName.c_str());
   trxStartMs = millis();
   Serial.println("TRX | begin name="+trxOwnName+" port="+String(udpPort)
                  +" cfgSource="+(trxCfgSource.length()? trxCfgSource : String("(auto)")));
   trxSubscribeFor(mainHWdeviceSelect);   // subscribe configured/default type up front
+}
+
+// Status line under the data: MQTT shows the subscribed topic with its "#" wildcard;
+// TrxNet shows source-client (e.g. "WX.01-INK.D9D0") since "#" is MQTT-only.
+String footerId(){
+  if(proto==1){
+    String src = trxSource.length() ? trxSource : String("(auto)");
+    return src + "-" + trxOwnName;
+  }
+  return String(TOPIC) + "#";
 }
 
 // "WiFi connected, waiting for data" splash for TrxNet mode — shown after WiFi is up
@@ -1736,9 +2220,10 @@ void trxMaintainSource(){
 }
 
 void TrxLoop(){
-  if(proto!=1) return;
+  bool srcTrx = (mainHWdeviceSelect==3 && srcUseTrx);
+  if(proto!=1 && !srcTrx) return;
   trxNet.loop();
-  trxMaintainSource();
+  if(mainHWdeviceSelect!=3) trxMaintainSource();   // auto-source picking is only for ROT/WX layouts
 }
 
 //-------------------------------------------------------------------------------------------------------
@@ -1952,7 +2437,12 @@ void loadConfig(){
   lowPower           = prefs.getBool("lowpwr", false);
   lpInterval         = prefs.getUShort("lpint", 15);
   batCapacity        = prefs.getUShort("batcap", 0);
+  srcCfgRaw          = prefs.getString("srcCfg", "");
+  srcRefreshSec      = prefs.getUShort("srcRefr", 60);
+  prioPrefixRaw      = prefs.getString("prioPfx", "");
   prefs.end();
+
+  parseSources();    // populate sources[] + srcUseMqtt/srcUseTrx from srcCfgRaw
 
   gmtOffset_sec      = (long)tzh * 3600L;
   daylightOffset_sec = dst ? 3600 : 0;
@@ -2117,6 +2607,7 @@ String jsonEsc(const String& s){
     else if(c=='\n') o+="\\n";
     else if(c=='\r') {}
     else if(c=='\t') o+="\\t";
+    else if((unsigned char)c < 0x20){ char b[8]; sprintf(b,"\\u%04x",(unsigned char)c); o += b; }
     else o+=c;
   }
   return o;
@@ -2207,6 +2698,9 @@ void handleApiConfig(){
   j += "\"lowpwr\":"  + String(lowPower ? "true":"false") + ",";
   j += "\"lpint\":"   + String(lpInterval) + ",";
   j += "\"batcap\":"  + String(batCapacity) + ",";
+  j += "\"srcRefr\":" + String(srcRefreshSec) + ",";
+  j += "\"srcCfg\":\""+ jsonEsc(srcCfgRaw) + "\",";
+  j += "\"prioPfx\":\""+ jsonEsc(prioPrefixRaw) + "\",";
   j += "\"vbat\":"    + String(lowPower ? lpBatteryVolts() : 0.0f, 2) + ",";
   j += "\"days\":"    + String(lpEstimateDays(), 1) + ",";
   // diagnostics
@@ -2218,7 +2712,8 @@ void handleApiConfig(){
   j += "\"heap\":" + String(ESP.getFreeHeap()) + ",";
   j += "\"fsTotal\":" + String(FsMounted ? SPIFFS.totalBytes() : 0) + ",";
   j += "\"fsUsed\":"  + String(FsMounted ? SPIFFS.usedBytes()  : 0) + ",";
-  j += "\"trxPeers\":" + String((proto==1 && APmode==false) ? trxNet.peerCount() : 0);
+  j += "\"trxPeers\":" + String((proto==1 && APmode==false) ? trxNet.peerCount() : 0) + ",";
+  j += "\"trxName\":\"" + jsonEsc(trxOwnName) + "\"";   // resolved TrxNet identity (INK.<devid|MAC>) - two units must differ
   j += "}";
   ajaxserver.sendHeader("Cache-Control", "no-store");
   ajaxserver.send(200, "application/json", j);
@@ -2260,6 +2755,9 @@ void handleApiConfigSave(){
   if(ajaxserver.hasArg("lowpwr"))   prefs.putBool("lowpwr", ajaxserver.arg("lowpwr")=="1");
   if(ajaxserver.hasArg("lpint"))    prefs.putUShort("lpint", (uint16_t)constrain(ajaxserver.arg("lpint").toInt(), 1, 1440));
   if(ajaxserver.hasArg("batcap"))   prefs.putUShort("batcap", (uint16_t)constrain(ajaxserver.arg("batcap").toInt(), 0, 65535));
+  if(ajaxserver.hasArg("srcCfg"))   prefs.putString("srcCfg", ajaxserver.arg("srcCfg"));
+  if(ajaxserver.hasArg("srcRefr"))  prefs.putUShort("srcRefr", (uint16_t)constrain(ajaxserver.arg("srcRefr").toInt(), 0, 65535));
+  if(ajaxserver.hasArg("prioPfx"))  prefs.putString("prioPfx", ajaxserver.arg("prioPfx"));
   prefs.putBool("apmode", false);   // configured -> boot into client mode
   prefs.end();
 
@@ -2282,6 +2780,48 @@ void handleApiPeers(){
     }
   }
   j += "]";
+  ajaxserver.sendHeader("Cache-Control", "no-store");
+  ajaxserver.send(200, "application/json", j);
+}
+
+// GET /api/srcpreview?proto=&topic=&format=&decimals=&numeric=&mul=&add=&thousands=&decsep=&replaceMap= - formatted last
+// value of a configured "More sources" row. Matches a running source by proto+topic, takes its raw input
+// (TrxNet bytes re-decoded per format, or the raw MQTT payload), then re-runs applyFormat() with the
+// *edited* params from the query so the setup page reflects changes before they are saved. Returns "—"
+// when nothing arrived.
+void handleApiSrcPreview(){
+  String topic = ajaxserver.arg("topic");
+  int prot = ajaxserver.arg("proto").toInt();
+  int fmt  = ajaxserver.arg("format").toInt();
+  uint8_t dec = ajaxserver.hasArg("decimals") ? (uint8_t)constrain(ajaxserver.arg("decimals").toInt(), 0, 2) : 2;
+  Source fmtCfg;                                    // formatting params straight from the (unsaved) form
+  fmtCfg.decimals   = dec;
+  fmtCfg.numeric    = ajaxserver.arg("numeric") == "1";
+  fmtCfg.mul        = ajaxserver.hasArg("mul") ? ajaxserver.arg("mul").toFloat() : 1.0f;
+  fmtCfg.add        = ajaxserver.hasArg("add") ? ajaxserver.arg("add").toFloat() : 0.0f;
+  fmtCfg.thousands  = ajaxserver.arg("thousands");
+  fmtCfg.decsep     = ajaxserver.arg("decsep");
+  fmtCfg.replaceMap = ajaxserver.arg("replaceMap");
+  String out = "—";
+  for(int i=0;i<sourceCount;i++){
+    Source& o = sources[i];
+    if((int)o.proto != prot || o.topic != topic) continue;
+    if(!o.haveValue) break;
+    String raw = (prot==1) ? decodeTrx((uint8_t)fmt, o.rawBuf, o.rawLen, dec) : o.rawText;
+    out = applyFormat(fmtCfg, raw);
+    break;
+  }
+  ajaxserver.sendHeader("Cache-Control", "no-store");
+  ajaxserver.send(200, "application/json", "{\"value\":\"" + jsonEsc(out) + "\"}");
+}
+
+// GET /api/wallcfg - WebSocket broker URI + root topic for the MQTT wall page (data/wall.html).
+// The wall subscribes to "#" so you can watch every live topic and copy a path into a "More sources"
+// row. WS port is fixed (WALL_WS_PORT); the broker must expose a WebSocket listener there.
+void handleApiWallCfg(){
+  String uri = "ws://" + String(mqttBroker[0]) + "." + String(mqttBroker[1]) + "."
+             + String(mqttBroker[2]) + "." + String(mqttBroker[3]) + ":" + String(WALL_WS_PORT) + "/";
+  String j = "{\"uri\":\"" + uri + "\",\"topic\":\"#\"}";
   ajaxserver.sendHeader("Cache-Control", "no-store");
   ajaxserver.send(200, "application/json", j);
 }
